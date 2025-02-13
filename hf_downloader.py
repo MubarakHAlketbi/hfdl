@@ -11,7 +11,7 @@ import shutil
 import multiprocessing
 from concurrent.futures import ThreadPoolExecutor
 import argparse
-from huggingface_hub import HfApi, hf_hub_url, scan_cache_dir
+from huggingface_hub import HfApi, hf_hub_url, HfFolder
 import signal
 from tqdm import tqdm
 from typing import Tuple, Optional, List, Set, Dict, Any
@@ -213,23 +213,32 @@ class DownloadConfig:
 
     @classmethod
     def calculate_optimal_threads(cls) -> int:
-        """Calculate optimal number of threads based on system capabilities.
+        """Calculate optimal number of threads optimized for I/O operations.
         
-        Always reserves:
-        - 1 thread for Ctrl+C handling (unless only 1 thread available)
-        - 1 thread kept free for system responsiveness
+        For I/O bound operations like downloads, we can use more threads than CPU cores
+        since threads spend most time waiting for I/O. However, we still need to be
+        reasonable to avoid system resource exhaustion.
+        
+        Rules:
+        1. Minimum: 1 thread (always guaranteed)
+        2. Maximum: 32 threads (prevent resource exhaustion)
+        3. Default calculation: min(32, max(8, cpu_cores * 4))
+           - Ensures at least 8 threads for I/O operations
+           - Scales with CPU cores but focuses on I/O performance
+           - Caps at 32 to prevent resource exhaustion
         """
-        available_threads = multiprocessing.cpu_count()
+        cpu_cores = multiprocessing.cpu_count()
         
-        if available_threads == 1:
-            # If only 1 thread, use it (no Ctrl+C handler possible)
-            return 1
-        elif available_threads == 2:
-            # With 2 threads, use 1 for download and 1 for Ctrl+C
-            return 1
-        else:
-            # Keep one thread for Ctrl+C and one free, use the rest
-            return max(1, available_threads - 2)
+        # Calculate base thread count optimized for I/O
+        base_threads = min(32, max(8, cpu_cores * 4))
+        
+        # Log the calculation process
+        logger.debug(f"Thread calculation:")
+        logger.debug(f"- CPU cores: {cpu_cores}")
+        logger.debug(f"- Base I/O threads: {base_threads}")
+        logger.debug("- Optimization: I/O-bound workload (more threads than cores)")
+        
+        return base_threads
 
     def __post_init__(self):
         """Validate and adjust configuration after initialization."""
@@ -342,35 +351,48 @@ class DownloadManager:
 
     @staticmethod
     def _get_auth_token() -> Optional[str]:
-        """Safely retrieve authentication token."""
+        """Safely retrieve authentication token using HfFolder."""
         try:
-            cache_info = scan_cache_dir()
-            return getattr(cache_info, 'token', None)  # Return None if no token
+            token = HfFolder.get_token()
+            if token:
+                logger.debug("Authentication token found")
+            else:
+                logger.debug("No authentication token available")  # Debug level since this is ok for public repos
+            return token
         except Exception as e:
-            logger.debug(f"No auth token available: {e}")  # Debug level since this is ok for public repos
+            logger.debug(f"Error retrieving auth token: {e}")
             return None
 
     def _signal_handler(self, sig, frame):
         """Handle interrupt signal."""
-        # Only handle Ctrl+C if we have more than 1 thread
-        if multiprocessing.cpu_count() > 1:
-            logger.info('Received interrupt signal (Ctrl+C). Stopping downloads...')
-            self.exit_event.set()
-            
-            # Log active downloads
-            active_files = [f for f, t in self.speed_trackers.items() if t.get_speed() > 0]
-            if active_files:
-                logger.info("Active downloads being stopped:")
-                for file in active_files:
-                    if file in self.download_state.files:
-                        progress = self.download_state.files[file]['downloaded']
-                        total = self.download_state.files[file]['size']
-                        logger.info(f"- {file}: {progress}/{total} bytes ({progress/total*100:.1f}%)")
-            
-            logger.info("Download state will be saved. Resume with the same command to continue.")
-        else:
-            # With only 1 thread, we can't handle Ctrl+C gracefully
-            logger.warning("System has only 1 thread available. Use Ctrl+Break or Task Manager to force exit if needed.")
+        logger.info('Received interrupt signal (Ctrl+C). Stopping downloads...')
+        self.exit_event.set()
+        
+        # Log active downloads
+        active_files = [f for f, t in self.speed_trackers.items() if t.get_speed() > 0]
+        if active_files:
+            logger.info("Active downloads being stopped:")
+            for file in active_files:
+                if file in self.download_state.files:
+                    progress = self.download_state.files[file]['downloaded']
+                    total = self.download_state.files[file]['size']
+                    logger.info(f"- {file}: {progress}/{total} bytes ({progress/total*100:.1f}%)")
+        
+        logger.info("Download state will be saved. Resume with the same command to continue.")
+        
+        # Give time for cleanup operations
+        cleanup_timeout = 5  # seconds
+        cleanup_start = time.time()
+        
+        while time.time() - cleanup_start < cleanup_timeout:
+            # Check if all downloads have stopped
+            if not any(t.get_speed() > 0 for t in self.speed_trackers.values()):
+                logger.info("All downloads stopped successfully")
+                break
+            time.sleep(0.1)
+        
+        if any(t.get_speed() > 0 for t in self.speed_trackers.values()):
+            logger.warning("Some downloads are still active. State will be saved but some files may be incomplete.")
 
     def __init__(self, repo_id: str, output_dir: str, repo_type: str = "model",
                  config: Optional[DownloadConfig] = None):
@@ -674,19 +696,52 @@ class DownloadManager:
 
     def _download_with_retry(self, url: str, headers: dict, timeout: Tuple[int, int],
                            stream: bool = False) -> requests.Response:
-        """Download with exponential backoff retry."""
+        """Download with exponential backoff retry and detailed logging."""
+        last_error = None
+        total_wait_time = 0
+        
         for attempt in range(self.config.max_retries):
             try:
+                if attempt > 0:
+                    logger.info(f"Retry attempt {attempt + 1}/{self.config.max_retries}")
+                
                 response = requests.get(url, stream=stream, headers=headers,
                                      timeout=timeout, verify=True)
                 response.raise_for_status()
+                
+                if attempt > 0:
+                    logger.info(f"Successfully recovered after {attempt + 1} attempts "
+                              f"(total wait time: {total_wait_time}s)")
                 return response
-            except requests.exceptions.RequestException as e:
-                if attempt == self.config.max_retries - 1:
-                    raise
-                wait_time = 2 ** attempt
-                logger.warning(f"Request failed: {e}, retrying in {wait_time} seconds...")
+                
+            except requests.exceptions.ConnectTimeout as e:
+                last_error = f"Connection timeout: {e}"
+                logger.warning(f"Connection timeout on attempt {attempt + 1}/{self.config.max_retries}")
+            except requests.exceptions.ReadTimeout as e:
+                last_error = f"Read timeout: {e}"
+                logger.warning(f"Read timeout on attempt {attempt + 1}/{self.config.max_retries}")
+            except requests.exceptions.ConnectionError as e:
+                last_error = f"Connection error: {e}"
+                logger.warning(f"Connection error on attempt {attempt + 1}/{self.config.max_retries}")
+            except requests.exceptions.HTTPError as e:
+                last_error = f"HTTP error {e.response.status_code}: {e}"
+                logger.warning(f"HTTP error {e.response.status_code} on attempt {attempt + 1}/{self.config.max_retries}")
+            except Exception as e:
+                last_error = f"Unexpected error: {e}"
+                logger.warning(f"Unexpected error on attempt {attempt + 1}/{self.config.max_retries}: {e}")
+            
+            if attempt < self.config.max_retries - 1:
+                wait_time = min(2 ** attempt, 60)  # Cap wait time at 60 seconds
+                total_wait_time += wait_time
+                logger.warning(f"Retrying in {wait_time} seconds... "
+                             f"({attempt + 1}/{self.config.max_retries} attempts)")
                 time.sleep(wait_time)
+            else:
+                logger.error(f"All retry attempts exhausted. Last error: {last_error}")
+                logger.error(f"Total time spent retrying: {total_wait_time} seconds")
+                raise requests.exceptions.RequestException(
+                    f"Failed after {self.config.max_retries} attempts. {last_error}"
+                )
 
     def _check_disk_space(self, required_mb: int) -> bool:
         """Check if there's enough disk space available."""
@@ -698,11 +753,40 @@ class DownloadManager:
             logger.error(f"Failed to check disk space: {e}")
             return False
 
-    def _verify_file_integrity(self, file_path: Path, expected_size: int) -> bool:
-        """Verify downloaded file integrity."""
+    def _verify_file_integrity(self, file_path: Path, expected_size: int, filename: str) -> bool:
+        """Verify downloaded file integrity using size and checksum."""
         try:
             actual_size = file_path.stat().st_size
-            return actual_size == expected_size
+            if actual_size != expected_size:
+                logger.error(f"Size mismatch for {filename}: expected {expected_size}, got {actual_size}")
+                return False
+
+            # Calculate checksum for regular files
+            if not filename.endswith('.gitattributes'):  # Skip LFS pointer files
+                logger.info(f"Calculating checksum for {filename}...")
+                checksum = calculate_file_checksum(file_path)
+                
+                # Get expected checksum from server
+                url = hf_hub_url(repo_id=self.repo_id, filename=filename, repo_type=self.repo_type)
+                headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
+                
+                try:
+                    response = requests.head(url, headers=headers,
+                                          timeout=(self.config.connect_timeout, self.config.read_timeout),
+                                          verify=True)
+                    
+                    if 'X-Content-Hash' in response.headers:
+                        expected_checksum = response.headers['X-Content-Hash']
+                        if checksum != expected_checksum:
+                            logger.error(f"Checksum mismatch for {filename}")
+                            return False
+                        logger.info(f"Checksum verified for {filename}")
+                    else:
+                        logger.warning(f"No checksum available from server for {filename}, using size verification only")
+                except Exception as e:
+                    logger.warning(f"Could not verify checksum for {filename}: {e}")
+            
+            return True
         except Exception as e:
             logger.error(f"Failed to verify file integrity: {e}")
             return False
@@ -805,7 +889,27 @@ class DownloadManager:
                     
                     # If file exists but is not complete, try resume
                     if existing_size < total_size:
-                        headers["Range"] = f"bytes={existing_size}-"
+                        # Test if server supports range requests
+                        test_headers = headers.copy()
+                        test_headers["Range"] = "bytes=0-0"
+                        try:
+                            test_response = requests.head(url, headers=test_headers,
+                                                      timeout=(self.config.connect_timeout, self.config.read_timeout),
+                                                      verify=True)
+                            
+                            if test_response.status_code == 206:
+                                # Server supports range requests
+                                headers["Range"] = f"bytes={existing_size}-"
+                                logger.info(f"Resuming download of {filename} from byte {existing_size}")
+                            else:
+                                # Server doesn't support range requests, start over
+                                logger.warning(f"Server doesn't support partial downloads for {filename}. Starting fresh download.")
+                                local_path.unlink()
+                                existing_size = 0
+                        except Exception as e:
+                            logger.warning(f"Error testing range support for {filename}: {e}. Starting fresh download.")
+                            local_path.unlink()
+                            existing_size = 0
                     else:
                         # File is larger than expected, remove and start over
                         logger.warning(f"File {filename} is larger than expected. Removing.")
@@ -984,6 +1088,12 @@ def main():
                        help="Remove and redownload corrupted files")
     parser.add_argument("--force", action="store_true",
                        help="Force fresh download, ignore existing files")
+    parser.add_argument("--file-size-threshold", type=int, default=200,
+                       help="Size threshold for big files in MB (default: 200)")
+    parser.add_argument("--min-speed-per-thread", type=int, default=3,
+                       help="Minimum speed per thread in MB/s (default: 3)")
+    parser.add_argument("--speed-test-duration", type=int, default=5,
+                       help="Duration of speed test in seconds (default: 5)")
     
     args = parser.parse_args()
 
@@ -996,7 +1106,10 @@ def main():
         min_free_space_mb=args.min_free_space,
         verify_downloads=args.verify,
         fix_broken=args.fix_broken,
-        force_download=args.force
+        force_download=args.force,
+        file_size_threshold=args.file_size_threshold * 1024 * 1024,  # Convert MB to bytes
+        min_speed_per_thread=args.min_speed_per_thread * 1024 * 1024,  # Convert MB/s to bytes/s
+        speed_test_duration=args.speed_test_duration
     )
 
     manager = DownloadManager(

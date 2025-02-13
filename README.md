@@ -10,28 +10,28 @@ A fast, reliable, and safe downloader for Hugging Face models and datasets. This
   * Speed testing for optimal performance
   * Real-time speed statistics
   * Progress tracking
-  * Resume capability
+  * Verified resume capability
 - 💻 **Resource Aware**: 
+  * I/O optimized thread management
   * Reserved thread for system responsiveness
-  * Reserved thread for safe interruption
   * Network bandwidth control
   * System load optimization
   * Per-thread performance tracking
 - 🔒 **Smart Authentication**:
   * Works with public repositories without token
-  * Automatic token handling for private repos
+  * Secure token handling for private repos
   * Clear authentication guidance
   * Safe token management
   * Graceful auth failures
 - 📁 **Organized Storage**: 
   * Automatic model-specific directory structure
   * Clean file organization
-  * Resume capability
+  * Verified resume capability
   * State persistence
   * Progress tracking
 - 🛡️ **Safe Operations**: 
-  * File integrity checks
-  * Proper error handling
+  * Comprehensive file integrity checks
+  * Checksum validation
   * Network saturation prevention
   * Graceful interruption handling
   * Clean state management
@@ -43,10 +43,6 @@ A fast, reliable, and safe downloader for Hugging Face models and datasets. This
   * requests
   * huggingface_hub
   * tqdm
-- CPU threads:
-  * Minimum 1 thread: Basic download (no Ctrl+C handling)
-  * Minimum 2 threads: Download + Ctrl+C handling
-  * Recommended 3+ threads: Download + Ctrl+C + System responsiveness
 - Sufficient disk space for downloads
 - Network connectivity
 - Hugging Face token (only for private repositories)
@@ -90,16 +86,19 @@ python hf_downloader.py username/model_name -t 8 -d custom_dir --min-free-space 
 
 # Verify and fix downloads
 python hf_downloader.py username/model_name --verify --fix-broken
+
+# Performance tuning
+python hf_downloader.py username/model_name --file-size-threshold 500 --min-speed-per-thread 5
 ```
 
 ### Command Line Options
 
-- `-t, --threads`: Number of download threads (default: auto-detected)
+- `-t, --threads`: Number of download threads (default: auto-detected, I/O optimized)
 - `-d, --directory`: Base download directory (default: "downloads")
 - `-r, --repo_type`: Repository type ("model", "dataset", or "space")
 - `--chunk-size`: Download chunk size in bytes
 - `--min-free-space`: Minimum required free space in MB
-- `--verify`: Verify existing downloads
+- `--verify`: Verify existing downloads (includes checksum validation)
 - `--fix-broken`: Remove and redownload corrupted files
 - `--force`: Force fresh download, ignore existing files
 - `--file-size-threshold`: Size threshold for big files in MB (default: 200)
@@ -123,7 +122,7 @@ The tool implements an intelligent size-based download strategy:
 3. **Speed Optimization**:
    - Initial speed test for first big file
    - Dynamic thread allocation based on speed
-   - Maintains minimum speed per thread (3MB/s default)
+   - Maintains minimum speed per thread
    - Adaptive performance optimization
 
 4. **Progress Tracking**:
@@ -134,10 +133,10 @@ The tool implements an intelligent size-based download strategy:
 
 ## Thread Management
 
-The tool uses an intelligent thread allocation strategy:
+The tool uses an I/O-optimized thread allocation strategy:
 
 1. **Small Files**:
-   - Uses all available threads
+   - Uses optimal thread count for I/O operations
    - Maximum parallel downloads
    - Quick completion of small files
 
@@ -148,10 +147,10 @@ The tool uses an intelligent thread allocation strategy:
    - Adaptive performance optimization
 
 3. **System Resources**:
-   - Reserved thread for Ctrl+C handling
-   - Reserved thread for system responsiveness
-   - Dynamic thread adjustment
-   - Performance monitoring
+   - I/O-optimized thread scaling
+   - Network-aware thread management
+   - Dynamic performance adjustment
+   - Resource monitoring
 
 ## Speed Management
 
@@ -180,7 +179,7 @@ The tool implements an advanced speed optimization system:
 The tool provides robust interrupt handling and progress tracking:
 
 1. **Safe Interruption**:
-   - Press Ctrl+C to safely stop downloads (when available)
+   - Press Ctrl+C to safely stop downloads
    - Current progress is saved automatically
    - Partial downloads are preserved
    - Clear status messages provided
@@ -203,7 +202,7 @@ The tool provides robust interrupt handling and progress tracking:
    ```bash
    # Resume interrupted download
    python hf_downloader.py username/model_name
-   # Will continue from where it left off
+   # Will continue from where it left off with verified resume
    ```
 
 ## Directory Structure
@@ -232,21 +231,21 @@ downloads/
    - Monitor download progress
 
 2. **Configuration**:
-   - Use default size threshold (200MB)
-   - Keep default minimum speed (3MB/s)
+   - Adjust file size threshold based on network
+   - Set minimum speed based on connection
    - Allow dynamic thread allocation
    - Monitor performance metrics
 
 3. **System Resources**:
-   - Tool manages threads automatically
+   - Tool manages threads optimally for I/O
    - Prevents system overload
    - Maintains responsiveness
    - Enables safe interruption
 
 4. **Interruptions**:
-   - Safe to interrupt with Ctrl+C (when available)
+   - Safe to interrupt with Ctrl+C
    - Progress is saved automatically
-   - Downloads can be resumed
+   - Downloads can be resumed safely
    - State is properly maintained
 
 ## Contributing
