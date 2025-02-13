@@ -166,6 +166,12 @@ class SpeedTracker:
             return 0.0
         return self.total_bytes / time_diff
 
+    def reset(self):
+        """Reset speed tracker."""
+        self.bytes_window.clear()
+        self.start_time = time.time()
+        self.total_bytes = 0
+
 class RateLimiter:
     """Limits download rate per thread."""
     def __init__(self, max_speed: float):  # max_speed in bytes/sec
@@ -201,6 +207,9 @@ class DownloadConfig:
     verify_downloads: bool = False  # Verify existing downloads
     fix_broken: bool = False  # Remove and redownload corrupted files
     force_download: bool = False  # Force fresh download
+    file_size_threshold: int = 200 * 1024 * 1024  # 200MB threshold for big files
+    min_speed_per_thread: int = 3 * 1024 * 1024  # 3MB/s minimum speed per thread
+    speed_test_duration: int = 5  # seconds for initial speed test
 
     @classmethod
     def calculate_optimal_threads(cls) -> int:
@@ -245,6 +254,84 @@ class DownloadConfig:
             self.num_threads = optimal_threads
         else:
             logger.info(f"Using requested thread count: {self.num_threads}")
+
+class FileClassifier:
+    """Classifies files based on size threshold."""
+    def __init__(self, size_threshold: int):
+        self.size_threshold = size_threshold
+        self.small_files: List[Tuple[str, int, bool]] = []
+        self.big_files: List[Tuple[str, int, bool]] = []
+
+    def classify_files(self, files: List[Tuple[str, int, bool]]) -> None:
+        """Classify files into small and big based on size threshold."""
+        self.small_files.clear()
+        self.big_files.clear()
+        
+        for file_info in files:
+            filename, size, is_lfs = file_info
+            if size <= self.size_threshold:
+                self.small_files.append(file_info)
+            else:
+                self.big_files.append(file_info)
+        
+        logger.info(f"Classified files: {len(self.small_files)} small files, {len(self.big_files)} big files")
+
+class SpeedTestManager:
+    """Manages speed testing for downloads."""
+    def __init__(self, duration: int, speed_tracker: SpeedTracker):
+        self.duration = duration
+        self.speed_tracker = speed_tracker
+        self.start_time = 0
+        self.test_complete = False
+
+    def start_test(self):
+        """Start speed test."""
+        self.start_time = time.time()
+        self.test_complete = False
+        self.speed_tracker.reset()
+
+    def update(self, bytes_downloaded: int) -> bool:
+        """Update speed test with new bytes. Returns True if test is complete."""
+        if self.test_complete:
+            return True
+
+        self.speed_tracker.update(bytes_downloaded)
+        elapsed = time.time() - self.start_time
+        
+        if elapsed >= self.duration:
+            self.test_complete = True
+            return True
+        return False
+
+    def get_average_speed(self) -> float:
+        """Get average speed during test period in bytes per second."""
+        return self.speed_tracker.get_average_speed()
+
+class ThreadOptimizer:
+    """Optimizes thread count based on speed requirements."""
+    def __init__(self, min_speed_per_thread: int, max_threads: int):
+        self.min_speed_per_thread = min_speed_per_thread
+        self.max_threads = max_threads
+
+    def calculate_optimal_threads(self, total_speed: float) -> int:
+        """Calculate optimal number of threads based on speed requirements."""
+        if total_speed <= 0:
+            return 1
+
+        # Calculate how many threads we can support while maintaining min_speed_per_thread
+        optimal_threads = int(total_speed / self.min_speed_per_thread)
+        
+        # Ensure we stay within bounds
+        optimal_threads = max(1, min(optimal_threads, self.max_threads))
+        
+        logger.info(
+            f"Speed-based thread calculation:"
+            f"\n- Total speed: {total_speed / (1024*1024):.2f} MB/s"
+            f"\n- Min speed per thread: {self.min_speed_per_thread / (1024*1024):.2f} MB/s"
+            f"\n- Optimal threads: {optimal_threads}"
+        )
+        
+        return optimal_threads
 
 class DownloadManager:
     @staticmethod
@@ -302,8 +389,92 @@ class DownloadManager:
         self.total_speed_tracker = SpeedTracker()
         self.download_state: Optional[DownloadState] = None
         
+        # New components for size-based download strategy
+        self.file_classifier = FileClassifier(self.config.file_size_threshold)
+        self.speed_test_manager = SpeedTestManager(self.config.speed_test_duration, self.total_speed_tracker)
+        self.thread_optimizer = ThreadOptimizer(self.config.min_speed_per_thread, self.config.num_threads)
+        
         # Register signal handler
         signal.signal(signal.SIGINT, self._signal_handler)
+
+    def _download_small_files(self, files: List[Tuple[str, int, bool]]) -> bool:
+        """Download small files using all available threads."""
+        logger.info("Starting download of small files using all available threads...")
+        
+        # Clear and prepare download queue
+        while not self.download_queue.empty():
+            self.download_queue.get()
+        
+        # Add all small files to queue
+        for file_info in files:
+            if file_info[0] not in self.completed_files:
+                self.download_queue.put((file_info[0], file_info[2]))  # filename and is_lfs
+        
+        if self.download_queue.empty():
+            logger.info("No small files to download")
+            return True
+        
+        # Use all available threads
+        with ThreadPoolExecutor(max_workers=self.config.num_threads) as executor:
+            workers = [executor.submit(self._worker) for _ in range(self.config.num_threads)]
+            try:
+                self.download_queue.join()
+                return True
+            except Exception as e:
+                logger.error(f"Error downloading small files: {e}")
+                return False
+
+    def _test_download_speed(self, file_info: Tuple[str, int, bool]) -> float:
+        """Test download speed using a single file."""
+        filename, size, is_lfs = file_info
+        logger.info(f"Testing download speed with file: {filename}")
+        
+        self.speed_test_manager.start_test()
+        
+        # Clear and prepare download queue
+        while not self.download_queue.empty():
+            self.download_queue.get()
+        
+        # Use single thread for speed test
+        self.download_queue.put((filename, is_lfs))
+        
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            worker = executor.submit(self._worker)
+            try:
+                self.download_queue.join()
+                avg_speed = self.speed_test_manager.get_average_speed()
+                logger.info(f"Speed test complete. Average speed: {avg_speed / (1024*1024):.2f} MB/s")
+                return avg_speed
+            except Exception as e:
+                logger.error(f"Error during speed test: {e}")
+                return 0.0
+
+    def _download_big_files(self, files: List[Tuple[str, int, bool]], thread_count: int) -> bool:
+        """Download big files with optimized thread count."""
+        logger.info(f"Starting download of big files using {thread_count} threads...")
+        
+        # Clear and prepare download queue
+        while not self.download_queue.empty():
+            self.download_queue.get()
+        
+        # Add all big files to queue
+        for file_info in files:
+            if file_info[0] not in self.completed_files:
+                self.download_queue.put((file_info[0], file_info[2]))  # filename and is_lfs
+        
+        if self.download_queue.empty():
+            logger.info("No big files to download")
+            return True
+        
+        # Use optimized thread count
+        with ThreadPoolExecutor(max_workers=thread_count) as executor:
+            workers = [executor.submit(self._worker) for _ in range(thread_count)]
+            try:
+                self.download_queue.join()
+                return True
+            except Exception as e:
+                logger.error(f"Error downloading big files: {e}")
+                return False
 
     def _initialize_state(self, files: List[Tuple[str, int, bool]]) -> None:
         """Initialize or load download state."""
@@ -707,7 +878,7 @@ class DownloadManager:
             return optimal_threads
 
     def download(self) -> bool:
-        """Main download method with state tracking and verification."""
+        """Main download method with size-based download strategy."""
         try:
             # Try to access repository (first without token, then with if needed)
             repo_info = self._try_repo_access()
@@ -749,77 +920,43 @@ class DownloadManager:
                 except Exception as save_error:
                     logger.warning(f"Could not save state file: {save_error}")
                     logger.info("Continuing without state persistence...")
-            
-            # Prepare download queue (skip completed files)
-            for filename, size, is_lfs in files:
-                if filename not in self.completed_files:
-                    self.download_queue.put((filename, is_lfs))
 
-            if self.download_queue.empty():
+            # Classify files by size
+            self.file_classifier.classify_files([f for f in files if f[0] not in self.completed_files])
+            
+            if not self.file_classifier.small_files and not self.file_classifier.big_files:
                 logger.info("All files already downloaded and verified")
                 return True
 
             logger.info(f"Found {len(files)} files in repository '{self.repo_id}'")
             logger.info(f"Downloading to: {self.output_dir}")
 
-            # Start with CPU-based thread count
-            current_threads = self.config.num_threads
-
-            # Start download threads
-            with ThreadPoolExecutor(max_workers=current_threads) as executor:
-                workers = [executor.submit(self._worker) for _ in range(current_threads)]
-                
-                # Monitor download progress
-                while not self.download_queue.empty() and not self.exit_event.is_set():
-                    time.sleep(self.config.speed_check_interval)
-                    current_speed = self.total_speed_tracker.get_speed()
-                    avg_speed = self.total_speed_tracker.get_average_speed()
-                    active_threads = len([t for t in self.speed_trackers.values() if t.get_speed() > 0])
-                    
-                    # Log download progress periodically
-                    if not hasattr(self, '_last_logged_download_speed') or \
-                       abs(current_speed - getattr(self, '_last_logged_download_speed', 0)) / max(current_speed, 1) > 0.2:
-                        self._last_logged_download_speed = current_speed
-                        logger.info(
-                            f"Download speed: {current_speed / (1024*1024):.2f} MB/s "
-                            f"(avg: {avg_speed / (1024*1024):.2f} MB/s) "
-                            f"using {active_threads}/{current_threads} threads"
-                        )
-
-            # Wait for completion or interruption
-            try:
-                self.download_queue.join()
-                
-                if self.exit_event.is_set():
-                    # Save final state before exiting
-                    if self.download_state:
-                        try:
-                            self.download_state.save()
-                            logger.info("Download state saved successfully")
-                        except Exception as e:
-                            logger.error(f"Failed to save download state: {e}")
-                    
-                    # Calculate overall progress
-                    total_files = len(self.download_state.files)
-                    completed = len(self.completed_files)
-                    in_progress = len([f for f in self.download_state.files
-                                     if self.download_state.files[f]['status'] == 'in_progress'])
-                    
-                    logger.info(
-                        f"Download interrupted: {completed}/{total_files} files completed "
-                        f"({completed/total_files*100:.1f}%), {in_progress} files in progress"
-                    )
+            # Download small files first using all available threads
+            if self.file_classifier.small_files:
+                logger.info(f"Starting download of {len(self.file_classifier.small_files)} small files...")
+                if not self._download_small_files(self.file_classifier.small_files):
                     return False
 
-                logger.info("Download completed successfully")
-                return True
+            # Handle big files
+            if self.file_classifier.big_files:
+                logger.info(f"Starting download of {len(self.file_classifier.big_files)} big files...")
                 
-            except KeyboardInterrupt:
-                # Handle any direct KeyboardInterrupt that might bypass signal handler
-                logger.info("Received keyboard interrupt. Stopping downloads...")
-                self.exit_event.set()
-                # Let the signal handler do the cleanup
-                return False
+                # Test download speed with first big file
+                if len(self.file_classifier.big_files) > 0:
+                    logger.info("Testing download speed with first big file...")
+                    avg_speed = self._test_download_speed(self.file_classifier.big_files[0])
+                    
+                    # Calculate optimal thread count based on speed test
+                    optimal_threads = self.thread_optimizer.calculate_optimal_threads(avg_speed)
+                    
+                    # Download remaining big files with optimized thread count
+                    remaining_files = self.file_classifier.big_files[1:]
+                    if remaining_files:
+                        if not self._download_big_files(remaining_files, optimal_threads):
+                            return False
+
+            logger.info("Download completed successfully")
+            return True
 
         except Exception as e:
             logger.error(f"Download failed: {e}")
