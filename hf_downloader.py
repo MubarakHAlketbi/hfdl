@@ -197,38 +197,30 @@ class DownloadConfig:
     connect_timeout: int = 10
     read_timeout: int = 30
     min_free_space_mb: int = 1000  # Minimum 1GB free space required
-    min_speed_large_files: int = 5 * 1024 * 1024  # 5 MB/s minimum for large files
-    large_file_threshold: int = 200 * 1024 * 1024  # 200 MB threshold
-    speed_check_interval: int = 5  # seconds
-    thread_speed_limit_percent: float = 0.95  # 95% of available bandwidth per thread
+    speed_check_interval: int = 5  # seconds for progress updates
     verify_downloads: bool = False  # Verify existing downloads
     fix_broken: bool = False  # Remove and redownload corrupted files
     force_download: bool = False  # Force fresh download
 
     @classmethod
     def calculate_optimal_threads(cls) -> int:
-        """Calculate optimal number of threads based on system capabilities."""
+        """Calculate optimal number of threads based on system capabilities.
+        
+        Always reserves:
+        - 1 thread for Ctrl+C handling (unless only 1 thread available)
+        - 1 thread kept free for system responsiveness
+        """
         available_threads = multiprocessing.cpu_count()
         
-        if available_threads <= 2:
-            # If only 1-2 threads available, use 1 thread (keeping 1 for Ctrl+C)
+        if available_threads == 1:
+            # If only 1 thread, use it (no Ctrl+C handler possible)
+            return 1
+        elif available_threads == 2:
+            # With 2 threads, use 1 for download and 1 for Ctrl+C
             return 1
         else:
-            # Keep one thread for Ctrl+C and one extra free, use the rest
+            # Keep one thread for Ctrl+C and one free, use the rest
             return max(1, available_threads - 2)
-
-    def adjust_threads_for_speed(self, total_size: int, current_speed: float) -> int:
-        """Adjust thread count based on download size and speed."""
-        if total_size < self.large_file_threshold:
-            # For small files, use CPU-based thread count
-            return self.num_threads
-        
-        # For large files, ensure minimum speed of 5 MB/s
-        if current_speed < self.min_speed_large_files:
-            # Reduce threads if we're not meeting minimum speed
-            return max(1, self.num_threads - 1)
-        
-        return self.num_threads
 
     def __post_init__(self):
         """Validate and adjust configuration after initialization."""
@@ -236,13 +228,10 @@ class DownloadConfig:
         available_threads = multiprocessing.cpu_count()
         optimal_threads = self.calculate_optimal_threads()
         
-        # Log system capabilities
+        # Log thread configuration
         logger.info(f"System capabilities:")
         logger.info(f"- CPU threads: {available_threads}")
         logger.info(f"- Optimal threads for download: {optimal_threads}")
-        logger.info(f"- Large file threshold: {self.large_file_threshold / (1024*1024):.0f} MB")
-        logger.info(f"- Minimum speed target: {self.min_speed_large_files / (1024*1024):.0f} MB/s")
-        logger.info(f"- Thread bandwidth limit: {self.thread_speed_limit_percent * 100:.0f}%")
         
         # Adjust thread count if needed
         if self.num_threads >= available_threads:
@@ -276,20 +265,25 @@ class DownloadManager:
 
     def _signal_handler(self, sig, frame):
         """Handle interrupt signal."""
-        logger.info('Received interrupt signal (Ctrl+C). Stopping downloads...')
-        self.exit_event.set()
-        
-        # Log active downloads
-        active_files = [f for f, t in self.speed_trackers.items() if t.get_speed() > 0]
-        if active_files:
-            logger.info("Active downloads being stopped:")
-            for file in active_files:
-                if file in self.download_state.files:
-                    progress = self.download_state.files[file]['downloaded']
-                    total = self.download_state.files[file]['size']
-                    logger.info(f"- {file}: {progress}/{total} bytes ({progress/total*100:.1f}%)")
-        
-        logger.info("Download state will be saved. Resume with the same command to continue.")
+        # Only handle Ctrl+C if we have more than 1 thread
+        if multiprocessing.cpu_count() > 1:
+            logger.info('Received interrupt signal (Ctrl+C). Stopping downloads...')
+            self.exit_event.set()
+            
+            # Log active downloads
+            active_files = [f for f, t in self.speed_trackers.items() if t.get_speed() > 0]
+            if active_files:
+                logger.info("Active downloads being stopped:")
+                for file in active_files:
+                    if file in self.download_state.files:
+                        progress = self.download_state.files[file]['downloaded']
+                        total = self.download_state.files[file]['size']
+                        logger.info(f"- {file}: {progress}/{total} bytes ({progress/total*100:.1f}%)")
+            
+            logger.info("Download state will be saved. Resume with the same command to continue.")
+        else:
+            # With only 1 thread, we can't handle Ctrl+C gracefully
+            logger.warning("System has only 1 thread available. Use Ctrl+Break or Task Manager to force exit if needed.")
 
     def __init__(self, repo_id: str, output_dir: str, repo_type: str = "model",
                  config: Optional[DownloadConfig] = None):
@@ -368,29 +362,56 @@ class DownloadManager:
         self.download_state.save()
 
     def _update_rate_limiters(self):
-        """Update rate limiters based on current speed."""
+        """Update rate limiters based on current speed with smoother adjustments."""
         total_speed = self.total_speed_tracker.get_speed()
         active_limiters = len(self.rate_limiters)
         
         if active_limiters > 0:
-            # Calculate speed limits
-            max_thread_speed = (total_speed * self.config.thread_speed_limit_percent) / active_limiters
-            total_allocated = max_thread_speed * active_limiters
+            # Constants for bandwidth management
+            MIN_SPEED_PER_THREAD = 3 * 1024 * 1024  # 3 MB/s minimum per thread
+            MAX_SPEED_PER_THREAD = 50 * 1024 * 1024  # 50 MB/s maximum per thread
+            ALPHA = 0.2  # Exponential moving average factor
             
-            # Log bandwidth allocation
-            logger.info(
-                f"Bandwidth allocation - Total: {total_speed / (1024*1024):.2f} MB/s, "
-                f"Per thread: {max_thread_speed / (1024*1024):.2f} MB/s, "
-                f"Active threads: {active_limiters}"
-            )
-            logger.info(
-                f"Speed limits - Total allocated: {total_allocated / (1024*1024):.2f} MB/s "
-                f"({self.config.thread_speed_limit_percent * 100:.0f}% of {total_speed / (1024*1024):.2f} MB/s)"
-            )
+            # Take 95% of total speed for stability
+            available_speed = total_speed * 0.95
             
-            # Update limiters
+            # Calculate optimal number of threads based on speed
+            optimal_threads = max(1, int(available_speed / MIN_SPEED_PER_THREAD))
+            
+            # If we have more active limiters than optimal, reduce speed instead of threads
+            if active_limiters > optimal_threads:
+                target_speed = available_speed / active_limiters
+            else:
+                target_speed = available_speed / optimal_threads
+            
+            # Ensure minimum speed per thread
+            target_speed = max(MIN_SPEED_PER_THREAD, min(MAX_SPEED_PER_THREAD, target_speed))
+            
+            # Update each rate limiter with smoothing
             for limiter in self.rate_limiters.values():
-                limiter.update_limit(max_thread_speed)
+                current_limit = limiter.max_speed
+                # Exponential moving average for smoother transitions
+                new_limit = (ALPHA * target_speed) + ((1 - ALPHA) * current_limit)
+                # Ensure we stay within bounds
+                new_limit = max(MIN_SPEED_PER_THREAD, min(MAX_SPEED_PER_THREAD, new_limit))
+                limiter.update_limit(new_limit)
+            
+            # Calculate actual allocation for logging
+            total_allocated = sum(limiter.max_speed for limiter in self.rate_limiters.values())
+            avg_thread_speed = total_allocated / active_limiters
+            
+            # Only log significant bandwidth changes (>20% change)
+            if not hasattr(self, '_last_logged_speed') or \
+               abs(total_speed - getattr(self, '_last_logged_speed', 0)) / max(total_speed, 1) > 0.2:
+                self._last_logged_speed = total_speed
+                logger.info(
+                    f"Bandwidth adjusted:"
+                    f"\n- Total speed: {total_speed / (1024*1024):.2f} MB/s"
+                    f"\n- Available speed (95%): {available_speed / (1024*1024):.2f} MB/s"
+                    f"\n- Active threads: {active_limiters}"
+                    f"\n- Optimal threads: {optimal_threads}"
+                    f"\n- Per-thread speed: {avg_thread_speed / (1024*1024):.2f} MB/s"
+                )
 
     def _process_chunk(self, chunk: bytes, filename: str):
         """Process a downloaded chunk, updating speed tracking."""
@@ -404,9 +425,9 @@ class DownloadManager:
         
         # Apply rate limiting
         if filename not in self.rate_limiters:
-            # Initialize with 95% of current speed
+            # Initialize with current speed
             current_speed = self.speed_trackers[filename].get_speed()
-            self.rate_limiters[filename] = RateLimiter(current_speed * self.config.thread_speed_limit_percent)
+            self.rate_limiters[filename] = RateLimiter(current_speed)
         
         self.rate_limiters[filename].limit(chunk_size)
 
@@ -595,12 +616,34 @@ class DownloadManager:
             url = hf_hub_url(repo_id=self.repo_id, filename=filename, repo_type=self.repo_type)
             headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
 
-            # Prepare for resume
+            # Check if file exists and verify size
+            existing_size = 0
             if local_path.exists():
-                existing_size = local_path.stat().st_size
-                headers["Range"] = f"bytes={existing_size}-"
-            else:
-                existing_size = 0
+                try:
+                    existing_size = local_path.stat().st_size
+                    # Get file size without downloading
+                    head_response = requests.head(url, headers=headers,
+                                               timeout=(self.config.connect_timeout, self.config.read_timeout),
+                                               verify=True)
+                    total_size = int(head_response.headers.get('Content-Length', 0))
+                    
+                    # If file is complete, skip download
+                    if existing_size == total_size:
+                        logger.info(f"File {filename} is already complete")
+                        return True
+                    
+                    # If file exists but is not complete, try resume
+                    if existing_size < total_size:
+                        headers["Range"] = f"bytes={existing_size}-"
+                    else:
+                        # File is larger than expected, remove and start over
+                        logger.warning(f"File {filename} is larger than expected. Removing.")
+                        local_path.unlink()
+                        existing_size = 0
+                except Exception as e:
+                    logger.warning(f"Error checking file size for {filename}: {e}. Starting fresh download.")
+                    local_path.unlink(missing_ok=True)
+                    existing_size = 0
 
             with self._download_with_retry(url, headers=headers,
                                          timeout=(self.config.connect_timeout, self.config.read_timeout),
@@ -646,65 +689,22 @@ class DownloadManager:
                 logger.error(f"Error accessing repository: {e}")
                 return None
 
-    def _run_speed_test(self) -> Tuple[float, int]:
-        """Run speed test and calculate optimal thread count.
+    def _get_optimal_threads(self) -> int:
+        """Get optimal thread count based on system capabilities."""
+        optimal_threads = self.config.calculate_optimal_threads()
+        available_threads = multiprocessing.cpu_count()
         
-        Returns:
-            Tuple[float, int]: Measured speed in bytes/sec and optimal thread count
-        """
-        logger.info("Running initial speed test to optimize download configuration...")
-        
-        try:
-            # Use a small test file from the repo if available, or huggingface.co
-            test_url = "https://huggingface.co/robots.txt"
-            headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
-            
-            # Download test file and measure speed
-            speed_tracker = SpeedTracker()
-            chunk_size = self.config.chunk_size
-            total_bytes = 0
-            start_time = time.time()
-            
-            with self._download_with_retry(test_url, headers=headers,
-                                       timeout=(self.config.connect_timeout, self.config.read_timeout),
-                                       stream=True) as r:
-                for chunk in r.iter_content(chunk_size=chunk_size):
-                    if chunk:
-                        total_bytes += len(chunk)
-                        speed_tracker.update(len(chunk))
-                        # Test for 5 seconds to get a good average
-                        if time.time() - start_time >= 5:
-                            break
-
-            measured_speed = speed_tracker.get_average_speed()
-            
-            # Calculate optimal thread count based on speed
-            # Base calculation: 1 thread per 5 MB/s of bandwidth
-            # But respect system CPU limits and minimum/maximum bounds
-            speed_based_threads = max(1, int(measured_speed / (5 * 1024 * 1024)))
-            cpu_based_threads = self.config.calculate_optimal_threads()
-            optimal_threads = min(speed_based_threads, cpu_based_threads)
-            
-            # Log detailed speed test results
-            logger.info("Speed test results:")
-            logger.info(f"- Measured bandwidth: {measured_speed / (1024*1024):.2f} MB/s")
-            logger.info(f"- Speed-based thread calculation: {speed_based_threads} threads")
-            logger.info(f"- CPU-based thread limit: {cpu_based_threads} threads")
-            logger.info(f"- Selected thread count: {optimal_threads} threads")
-            
-            # Calculate and log per-thread bandwidth allocation
-            per_thread_bandwidth = measured_speed / optimal_threads
-            logger.info("Bandwidth allocation:")
-            logger.info(f"- Total bandwidth: {measured_speed / (1024*1024):.2f} MB/s")
-            logger.info(f"- Per-thread bandwidth: {per_thread_bandwidth / (1024*1024):.2f} MB/s")
-            logger.info(f"- Thread utilization: {self.config.thread_speed_limit_percent * 100:.0f}%")
-            
-            return measured_speed, optimal_threads
-            
-        except Exception as e:
-            logger.warning(f"Speed test failed: {e}")
-            logger.info("Using default thread configuration")
-            return 0, self.config.calculate_optimal_threads()
+        logger.info("Thread configuration:")
+        if available_threads <= 2:
+            logger.info("- Download threads: 1")
+            logger.info("- Reserved for Ctrl+C: 1")
+            logger.info("- Reserved free: 0")
+            return 1
+        else:
+            logger.info(f"- Download threads: {optimal_threads}")
+            logger.info("- Reserved for Ctrl+C: 1")
+            logger.info("- Reserved free: 1")
+            return optimal_threads
 
     def download(self) -> bool:
         """Main download method with state tracking and verification."""
@@ -714,16 +714,15 @@ class DownloadManager:
             if not repo_info:
                 return False
                 
-            # Run speed test and optimize thread count
-            measured_speed, optimal_threads = self._run_speed_test()
-            if measured_speed > 0:
-                self.config.num_threads = optimal_threads
-
             # Store token if we needed it for access
             self.token = getattr(repo_info, '_token', None)
 
-            # Get file list and calculate total size
-            files = [(file.rfilename, file.size, file.lfs is not None) 
+            # Get optimal thread count based on system capabilities
+            optimal_threads = self._get_optimal_threads()
+            self.config.num_threads = optimal_threads
+
+            # Get file list
+            files = [(file.rfilename, file.size, file.lfs is not None)
                     for file in repo_info.siblings]
             
             try:
@@ -770,45 +769,22 @@ class DownloadManager:
             with ThreadPoolExecutor(max_workers=current_threads) as executor:
                 workers = [executor.submit(self._worker) for _ in range(current_threads)]
                 
-                # Monitor and adjust threads based on speed
+                # Monitor download progress
                 while not self.download_queue.empty() and not self.exit_event.is_set():
                     time.sleep(self.config.speed_check_interval)
                     current_speed = self.total_speed_tracker.get_speed()
                     avg_speed = self.total_speed_tracker.get_average_speed()
-                    
-                    # Log speed statistics
-                    logger.info(
-                        f"Download speeds - Current: {current_speed / (1024*1024):.2f} MB/s, "
-                        f"Average: {avg_speed / (1024*1024):.2f} MB/s"
-                    )
-                    
-                    # Log per-thread statistics
                     active_threads = len([t for t in self.speed_trackers.values() if t.get_speed() > 0])
-                    avg_thread_speed = current_speed / max(active_threads, 1)
-                    logger.info(
-                        f"Thread usage - Active: {active_threads}, "
-                        f"Average speed per thread: {avg_thread_speed / (1024*1024):.2f} MB/s"
-                    )
                     
-                    # Adjust thread count based on speed and file size
-                    new_thread_count = self.config.adjust_threads_for_speed(
-                        self.config.large_file_threshold, current_speed
-                    )
-                    
-                    # Log thread adjustment decision
-                    if new_thread_count != current_threads:
-                        if current_speed < self.config.min_speed_large_files:
-                            logger.info(
-                                f"Speed {current_speed / (1024*1024):.2f} MB/s below minimum "
-                                f"{self.config.min_speed_large_files / (1024*1024):.2f} MB/s. "
-                                f"Reducing threads from {current_threads} to {new_thread_count}"
-                            )
-                        else:
-                            logger.info(
-                                f"Adjusting thread count from {current_threads} to {new_thread_count} "
-                                f"based on performance metrics"
-                            )
-                        current_threads = new_thread_count
+                    # Log download progress periodically
+                    if not hasattr(self, '_last_logged_download_speed') or \
+                       abs(current_speed - getattr(self, '_last_logged_download_speed', 0)) / max(current_speed, 1) > 0.2:
+                        self._last_logged_download_speed = current_speed
+                        logger.info(
+                            f"Download speed: {current_speed / (1024*1024):.2f} MB/s "
+                            f"(avg: {avg_speed / (1024*1024):.2f} MB/s) "
+                            f"using {active_threads}/{current_threads} threads"
+                        )
 
             # Wait for completion or interruption
             try:

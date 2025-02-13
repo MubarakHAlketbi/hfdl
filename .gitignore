@@ -1,4 +1,7 @@
 cline_docs/
 downloads/
 
-,gitignore
+.cline_rules
+.gitignore
+
+cloudflare-speedtest.md

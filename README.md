@@ -4,17 +4,17 @@ A fast, reliable, and safe downloader for Hugging Face models and datasets. This
 
 ## Features
 
-- 🚀 **Smart Downloads**: 
-  * Guaranteed 5 MB/s minimum speed for large files
-  * Adaptive thread management
+- 🚀 **Smart Downloads**:
+  * Fixed thread allocation based on system capabilities
   * Network-aware operations
-  * Bandwidth optimization
   * Real-time speed statistics
+  * Progress tracking
+  * Resume capability
 - 💻 **Resource Aware**: 
-  * Intelligent CPU thread management
+  * Reserved thread for system responsiveness
+  * Reserved thread for safe interruption
   * Network bandwidth control
   * System load optimization
-  * Maintains system responsiveness
   * Per-thread performance tracking
 - 🔒 **Smart Authentication**:
   * Works with public repositories without token
@@ -38,7 +38,14 @@ A fast, reliable, and safe downloader for Hugging Face models and datasets. This
 ## Requirements
 
 - Python 3.7 or higher
-- Minimum 2 CPU threads (recommended 4+ for optimal performance)
+- Required packages:
+  * requests
+  * huggingface_hub
+  * tqdm
+- CPU threads:
+  * Minimum 1 thread: Basic download (no Ctrl+C handling)
+  * Minimum 2 threads: Download + Ctrl+C handling
+  * Recommended 3+ threads: Download + Ctrl+C + System responsiveness
 - Sufficient disk space for downloads
 - Network connectivity
 - Hugging Face token (only for private repositories)
@@ -53,7 +60,7 @@ cd <repository-name>
 
 2. Install dependencies:
 ```bash
-pip install requests huggingface_hub tqdm
+pip install -r requirements.txt
 ```
 
 3. (Optional) Set up authentication:
@@ -95,12 +102,53 @@ python hf_downloader.py username/model_name --verify --fix-broken
 - `--fix-broken`: Remove and redownload corrupted files
 - `--force`: Force fresh download, ignore existing files
 
+## Thread Management
+
+The tool uses a fixed thread allocation strategy based on system capabilities:
+
+1. **Single Thread System**:
+   - Uses the single thread for downloads
+   - No Ctrl+C handling available
+   - Must use Task Manager to force exit
+
+2. **Two Thread System**:
+   - 1 thread for downloads
+   - 1 thread reserved for Ctrl+C handling
+   - No free thread for system responsiveness
+
+3. **Three+ Thread System**:
+   - Download threads (system total minus 2)
+   - 1 thread reserved for Ctrl+C handling
+   - 1 thread kept free for system responsiveness
+
+## Speed Management
+
+The tool implements a simple and reliable speed monitoring system:
+
+1. **Speed Monitoring**:
+   - Real-time download speed tracking
+   - Per-file progress monitoring
+   - Average speed calculation
+   - Active thread usage tracking
+
+2. **Thread Allocation**:
+   - Fixed thread count based on CPU cores
+   - Ensures system responsiveness
+   - Maintains stable downloads
+   - Clear progress reporting
+
+3. **Progress Tracking**:
+   - Real-time speed statistics
+   - Active thread monitoring
+   - Overall progress tracking
+   - Clear status updates
+
 ## Interrupt Handling
 
 The tool provides robust interrupt handling and progress tracking:
 
 1. **Safe Interruption**:
-   - Press Ctrl+C to safely stop downloads
+   - Press Ctrl+C to safely stop downloads (when available)
    - Current progress is saved automatically
    - Partial downloads are preserved
    - Clear status messages provided
@@ -126,24 +174,6 @@ The tool provides robust interrupt handling and progress tracking:
    # Will continue from where it left off
    ```
 
-## Smart Download Management
-
-The tool automatically adapts its behavior based on file size:
-
-### Large Files (>200MB)
-- Guarantees minimum 5 MB/s download speed
-- Adjusts threads automatically for performance
-- Shows real-time speed information
-- Adapts to network conditions
-- Provides detailed progress tracking
-
-### Small Files (<200MB)
-- Uses maximum available threads
-- Optimizes for quick completion
-- Prevents network saturation
-- Maintains system responsiveness
-- Efficient resource usage
-
 ## Directory Structure
 
 Downloads are organized by model name:
@@ -161,89 +191,28 @@ downloads/
     └── ...
 ```
 
-## Features in Detail
-
-### Intelligent Resource Management
-- Automatically detects system capabilities
-- Adapts to network conditions
-- Prevents system overload
-- Maintains responsiveness
-- Optimizes bandwidth usage
-
-### Safe Downloads
-- Verifies file integrity
-- Checks available disk space
-- Supports download resume
-- Handles network issues gracefully
-- Provides clear error messages
-
-### Progress Tracking
-- Per-file progress bars
-- Download speed information
-- Thread adjustment notifications
-- Clear status messages
-- Performance statistics
-
-## Examples
-
-1. Download a public model:
-```bash
-python hf_downloader.py Qwen/Qwen2.5-Coder-32B-Instruct
-```
-
-2. Download a private model:
-```bash
-# Will automatically use token if needed
-python hf_downloader.py username/private-model
-```
-
-3. Download with custom settings:
-```bash
-python hf_downloader.py username/model_name -t 6 -d models --verify
-```
-
-4. Resume interrupted download:
-```bash
-# Same command as before
-python hf_downloader.py username/model_name
-# Will continue from last saved state
-```
-
-## Error Handling
-
-The tool provides clear error messages for common issues:
-- Authentication requirements
-- Network connectivity problems
-- Insufficient disk space
-- Invalid repository names
-- Permission issues
-- Download interruptions
-- Speed-related issues
-
 ## Best Practices
 
-1. **Authentication**:
-   - Only login if needed for private repos
-   - Keep token secure
-   - Follow authentication prompts
-
-2. **Thread Count**:
+1. **Thread Configuration**:
    - Let the tool auto-detect thread count
-   - Tool will optimize based on file size
+   - Tool reserves threads appropriately
    - Maintains system responsiveness
+   - Ensures safe interruption capability
 
-3. **Disk Space**:
-   - Ensure sufficient free space (default minimum: 1GB)
-   - Tool will check before downloading
-   - Clear error messages if space low
+2. **Download Management**:
+   - Real-time progress monitoring
+   - Efficient thread utilization
+   - Stable download process
+   - Clear status reporting
 
-4. **Large Downloads**:
-   - Tool automatically optimizes for files >200MB
-   - Guaranteed minimum speed of 5 MB/s
-   - Adaptive thread management
+3. **System Resources**:
+   - Tool reserves threads for system
+   - Prevents system overload
+   - Maintains responsiveness
+   - Enables safe interruption
 
-5. **Interruptions**:
-   - Safe to interrupt with Ctrl+C
+4. **Interruptions**:
+   - Safe to interrupt with Ctrl+C (when available)
    - Progress is saved automatically
    - Downloads can be resumed
    - State is properly maintained
