@@ -5,8 +5,9 @@ A fast, reliable, and safe downloader for Hugging Face models and datasets. This
 ## Features
 
 - 🚀 **Smart Downloads**:
-  * Fixed thread allocation based on system capabilities
-  * Network-aware operations
+  * Size-based download strategy (small files first)
+  * Dynamic thread allocation for big files
+  * Speed testing for optimal performance
   * Real-time speed statistics
   * Progress tracking
   * Resume capability
@@ -101,41 +102,72 @@ python hf_downloader.py username/model_name --verify --fix-broken
 - `--verify`: Verify existing downloads
 - `--fix-broken`: Remove and redownload corrupted files
 - `--force`: Force fresh download, ignore existing files
+- `--file-size-threshold`: Size threshold for big files in MB (default: 200)
+- `--min-speed-per-thread`: Minimum speed per thread in MB/s (default: 3)
+- `--speed-test-duration`: Duration of speed test in seconds (default: 5)
+
+## Download Strategy
+
+The tool implements an intelligent size-based download strategy:
+
+1. **File Classification**:
+   - Small files (<200MB by default)
+   - Big files (>200MB by default)
+   - Configurable size threshold
+
+2. **Download Priority**:
+   - Small files downloaded first using all threads
+   - Big files processed after small files complete
+   - Ensures efficient resource utilization
+
+3. **Speed Optimization**:
+   - Initial speed test for first big file
+   - Dynamic thread allocation based on speed
+   - Maintains minimum speed per thread (3MB/s default)
+   - Adaptive performance optimization
+
+4. **Progress Tracking**:
+   - Real-time speed statistics
+   - Per-file progress monitoring
+   - Thread utilization tracking
+   - Clear status updates
 
 ## Thread Management
 
-The tool uses a fixed thread allocation strategy based on system capabilities:
+The tool uses an intelligent thread allocation strategy:
 
-1. **Single Thread System**:
-   - Uses the single thread for downloads
-   - No Ctrl+C handling available
-   - Must use Task Manager to force exit
+1. **Small Files**:
+   - Uses all available threads
+   - Maximum parallel downloads
+   - Quick completion of small files
 
-2. **Two Thread System**:
-   - 1 thread for downloads
-   - 1 thread reserved for Ctrl+C handling
-   - No free thread for system responsiveness
+2. **Big Files**:
+   - Initial single-thread speed test
+   - Dynamic thread allocation based on speed
+   - Ensures minimum speed per thread
+   - Adaptive performance optimization
 
-3. **Three+ Thread System**:
-   - Download threads (system total minus 2)
-   - 1 thread reserved for Ctrl+C handling
-   - 1 thread kept free for system responsiveness
+3. **System Resources**:
+   - Reserved thread for Ctrl+C handling
+   - Reserved thread for system responsiveness
+   - Dynamic thread adjustment
+   - Performance monitoring
 
 ## Speed Management
 
-The tool implements a simple and reliable speed monitoring system:
+The tool implements an advanced speed optimization system:
 
-1. **Speed Monitoring**:
-   - Real-time download speed tracking
-   - Per-file progress monitoring
+1. **Speed Testing**:
+   - Initial speed test for big files
    - Average speed calculation
-   - Active thread usage tracking
+   - Thread optimization based on speed
+   - Minimum speed guarantees
 
 2. **Thread Allocation**:
-   - Fixed thread count based on CPU cores
-   - Ensures system responsiveness
-   - Maintains stable downloads
-   - Clear progress reporting
+   - Dynamic thread count for big files
+   - Based on speed test results
+   - Maintains minimum speed per thread
+   - Ensures optimal performance
 
 3. **Progress Tracking**:
    - Real-time speed statistics
@@ -193,20 +225,20 @@ downloads/
 
 ## Best Practices
 
-1. **Thread Configuration**:
-   - Let the tool auto-detect thread count
-   - Tool reserves threads appropriately
-   - Maintains system responsiveness
-   - Ensures safe interruption capability
+1. **Download Strategy**:
+   - Let small files download first
+   - Allow speed testing for big files
+   - Use default thread optimization
+   - Monitor download progress
 
-2. **Download Management**:
-   - Real-time progress monitoring
-   - Efficient thread utilization
-   - Stable download process
-   - Clear status reporting
+2. **Configuration**:
+   - Use default size threshold (200MB)
+   - Keep default minimum speed (3MB/s)
+   - Allow dynamic thread allocation
+   - Monitor performance metrics
 
 3. **System Resources**:
-   - Tool reserves threads for system
+   - Tool manages threads automatically
    - Prevents system overload
    - Maintains responsiveness
    - Enables safe interruption
