@@ -168,11 +168,6 @@ class HybridHasher:
             sha256_hash.hexdigest()
         )
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 class DownloadState:
@@ -311,7 +306,9 @@ def handle_errors(fn):
             return fn(*args, **kwargs)
         except Exception as e:
             logger.error(f"Error in {fn.__name__}: {str(e)}")
-            args[0].circuit_breaker.record_failure()
+            # Only record failure if circuit_breaker exists
+            if hasattr(args[0], 'circuit_breaker') and args[0].circuit_breaker is not None:
+                args[0].circuit_breaker.record_failure()
             raise
     return wrapper
 
@@ -358,8 +355,9 @@ class RateLimiter:
         self.downloaded += chunk_size
         elapsed = time.time() - self.start_time
         expected_time = self.downloaded / self.max_speed
-        if expected_time > elapsed:
-            time.sleep(expected_time - elapsed)
+        sleep_duration = expected_time - elapsed
+        if sleep_duration > 0:
+            time.sleep(sleep_duration)
 
     def update_limit(self, new_max_speed: float):
         """Update the rate limit."""
@@ -368,39 +366,6 @@ class RateLimiter:
         self.downloaded = 0
         self.start_time = time.time()
 
-@dataclass
-class DownloadConfig:
-    def __init__(self, **kwargs):
-        self.num_threads = kwargs.get('num_threads', 0)
-        self.chunk_size = kwargs.get('chunk_size', 1024*1024)
-        self.min_free_space_mb = kwargs.get('min_free_space_mb', 5000)
-        self.file_size_threshold = kwargs.get('file_size_threshold', 200*1024*1024)
-        self.min_speed_percentage = max(1, min(100, kwargs.get('min_speed_percentage', 5)))
-        self.speed_test_duration = kwargs.get('speed_test_duration', 5)
-        self.verify_downloads = kwargs.get('verify_downloads', False)
-        self.fix_broken = kwargs.get('fix_broken', False)
-        self.force_download = kwargs.get('force_download', False)
-        self.max_retries = kwargs.get('max_retries', 5)  
-        self.connect_timeout = kwargs.get('connect_timeout', 10)  
-        self.read_timeout = kwargs.get('read_timeout', 30)  
-        self.token_refresh_interval = kwargs.get('token_refresh_interval', 3600) 
-
-        # Calculate optimal threads if auto-detected
-        if self.num_threads <= 0:
-            self.num_threads = self.calculate_optimal_threads()
-
-    def __post_init__(self):
-        """Validate configuration after initialization"""
-        if not 1 <= self.min_speed_percentage <= 100:
-            raise ValueError("min_speed_percentage must be between 1-100")
-            
-        if self.file_size_threshold < 0:
-            raise ValueError("file_size_threshold cannot be negative")
-
-    @staticmethod
-    def calculate_optimal_threads() -> int:
-        cpu_cores = multiprocessing.cpu_count()
-        return min(32, max(8, cpu_cores * 4))
 class FileClassifier:
     """Classifies files based on size for optimized downloading."""
     def __init__(self, file_size_threshold: int, repo_id: str, repo_type: str):

@@ -56,7 +56,7 @@ def main():
         downloader = HFDownloader(
             args.model_id,
             download_dir=args.directory,
-            num_threads=args.threads or 'auto',
+            num_threads=args.threads,  # Let config handle 0 as 'auto'
             repo_type=args.repo_type,
             chunk_size=args.chunk_size,
             min_free_space=args.min_free_space,
