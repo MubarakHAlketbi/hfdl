@@ -326,14 +326,30 @@ class FileClassifier:
     def _get_fallback_size(self, filename: str, repo_id: str, repo_type: str, token: Optional[str] = None) -> int:
         """Get file size using HEAD request when API returns None."""
         try:
+            # Validate repository ID before making request
+            if not repo_id or not isinstance(repo_id, str):
+                logger.error("Invalid repository ID for fallback size retrieval")
+                return 0
+                
+            # Ensure repo_id has correct format
+            if not re.match(r'^[\w.-]+/[\w.-]+$', repo_id):
+                logger.error(f"Invalid repository ID format: {repo_id}")
+                return 0
+                
             url = hf_hub_url(repo_id=repo_id, filename=filename, repo_type=repo_type)
             headers = {"Authorization": f"Bearer {token}"} if token else {}
             response = requests.head(url, headers=headers, timeout=(10, 30))
             if response.status_code == 200 and 'Content-Length' in response.headers:
                 return int(response.headers['Content-Length'])
+            elif response.status_code == 404:
+                logger.warning(f"File not found: {filename}")
+                return 0
+            else:
+                logger.warning(f"Failed to get size for {filename}: HTTP {response.status_code}")
+                return 0
         except Exception as e:
             logger.warning(f"Failed to get fallback size for {filename}: {e}")
-        return 0  # Default to small file if size cannot be determined
+            return 0  # Default to small file if size cannot be determined
 
     def classify_files(self, files: List[Tuple[str, int, bool]], repo_id: str = "",
                       repo_type: str = "model", token: Optional[str] = None) -> None:
@@ -415,9 +431,23 @@ class ThreadOptimizer:
 class DownloadManager:
     @staticmethod
     def _normalize_repo_id(repo_id_or_url: str) -> str:
-        """Normalize repository ID from URL or direct input."""
+        """Normalize repository ID from URL or direct input with validation."""
+        if not repo_id_or_url:
+            raise ValueError("Repository ID cannot be empty")
+            
+        # Remove URL prefix if present
         repo_id = repo_id_or_url.replace("https://huggingface.co/", "")
-        return repo_id.rstrip("/")
+        repo_id = repo_id.rstrip("/")
+        
+        # Validate repository ID format
+        if not re.match(r'^[\w.-]+/[\w.-]+$', repo_id):
+            raise ValueError(
+                f"Invalid repository ID format: {repo_id}\n"
+                "Expected format: username/repository-name\n"
+                "Allowed characters: letters, numbers, hyphens, underscores, and dots"
+            )
+            
+        return repo_id
 
     @staticmethod
     def _get_auth_token() -> Optional[str]:
@@ -1118,6 +1148,13 @@ class DownloadManager:
         try:
             # Initialize token refresh time
             self.token_last_refresh = time.time()
+            
+            # Validate repository ID format
+            try:
+                self.repo_id = self._normalize_repo_id(self.repo_id)
+            except ValueError as e:
+                logger.error(f"Repository ID validation failed: {e}")
+                return False
             
             # Try to access repository (first without token, then with if needed)
             repo_info = self._try_repo_access()
