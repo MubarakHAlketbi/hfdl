@@ -22,6 +22,49 @@ from dataclasses import dataclass
 from pathlib import Path
 from collections import deque
 from datetime import datetime, timedelta
+from typing import Optional, Dict, Any
+import asyncio
+from functools import wraps
+
+class HFDownloader:
+    def __init__(
+        self, 
+        model_id: str, 
+        download_dir: str = "downloads",
+        threads: Optional[int] = None,
+        verify: bool = False
+    ):
+        self.model_id = model_id
+        self.download_dir = download_dir
+        # Initialize other parameters
+
+    def download(self):
+        """Main download method for programmatic use"""
+        # Your implementation here
+    
+    async def download_async(self):
+        """Async version of download method"""
+
+    def _ipython_display_(self):
+        """Display progress in Jupyter notebooks"""
+        from IPython.display import display
+        display(self.create_progress_widget())
+
+def handle_errors(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            # Custom error handling
+            raise HFDownloadError(str(e)) from e
+    return wrapper
+
+def download_model(model_id, **kwargs):
+    """Simplified programmatic interface"""
+    downloader = HFDownloader(model_id, **kwargs)
+    return downloader.download()
+
 
 class CircuitBreaker:
     """Circuit breaker pattern implementation for error handling."""
