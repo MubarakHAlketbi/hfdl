@@ -6,19 +6,19 @@ with open("README.md", "r") as fh:
 setup(
     name="hf-downloader",
     version="0.1.0",
-    author="Your Name",
-    author_email="your@email.com",
+    author="Mubarak H. Alketbi",
+    author_email="mubarak.harran@gmail.com",
     description="Advanced Hugging Face model/downloader with smart resource management",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/hf-downloader",
+    url="https://github.com/MubarakHAlketbi/hf_downloader",
     packages=find_packages(),
     install_requires=[
-        "requests",
-        "huggingface_hub",
-        "tqdm",
-        "portalocker",
-        "blake3"
+        "requests>=2.26.0",
+        "huggingface_hub>=0.11.0",
+        "tqdm>=4.62.0",
+        "portalocker>=2.3.2",
+        "blake3>=0.3.0"
     ],
     entry_points={
         "console_scripts": [
