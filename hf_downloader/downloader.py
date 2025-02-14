@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from collections import deque
 from datetime import datetime
+from .config import DownloadConfig
 import sys
 
 logger = logging.getLogger(__name__)
