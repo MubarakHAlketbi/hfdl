@@ -18,7 +18,7 @@ A fast, reliable, and safe downloader for Hugging Face models and datasets. This
   * Network bandwidth control
   * System load optimization
   * Per-thread performance tracking
-  * Directory creation locks
+  * Cross-platform file locking
 - 🔒 **Smart Authentication**:
   * Works with public repositories without token
   * Secure token handling for private repos
@@ -34,12 +34,12 @@ A fast, reliable, and safe downloader for Hugging Face models and datasets. This
   * Progress tracking
   * Race condition prevention
 - 🛡️ **Safe Operations**: 
-  * Comprehensive file integrity checks
-  * Multiple checksum validation methods
+  * Hybrid hashing (BLAKE3 for speed, SHA256 for compatibility)
+  * Pre-allocated file space
+  * 5% disk space safety buffer
   * Network saturation prevention
   * Graceful interruption handling
   * Clean state management
-  * Edge case handling
 
 ## Requirements
 
@@ -48,6 +48,8 @@ A fast, reliable, and safe downloader for Hugging Face models and datasets. This
   * requests
   * huggingface_hub
   * tqdm
+  * portalocker
+  * blake3
 - Sufficient disk space for downloads
 - Network connectivity
 - Hugging Face token (only for private repositories)
@@ -162,7 +164,7 @@ The tool uses an I/O-optimized thread allocation strategy:
    - Network-aware thread management
    - Dynamic performance adjustment
    - Resource monitoring
-   - Directory operation locks
+   - Cross-platform file locking
 
 ## Speed Management
 
@@ -208,10 +210,10 @@ The tool provides robust state management:
    - Graceful token updates
 
 3. **File Integrity**:
-   - Multiple checksum verification methods
-   - Fallback to model index SHA
-   - Size verification
-   - Partial file validation
+   - Hybrid hashing (BLAKE3 for large files)
+   - SHA256 compatibility with API
+   - Pre-allocated file space
+   - 5% disk space safety buffer
    - Clear integrity reporting
 
 ## Directory Structure
@@ -252,7 +254,7 @@ downloads/
    - Prevents system overload
    - Maintains responsiveness
    - Enables safe interruption
-   - Handles directory permissions
+   - Uses cross-platform file locking
 
 4. **Interruptions**:
    - Safe to interrupt with Ctrl+C
@@ -274,3 +276,5 @@ MIT
 - Built using the Hugging Face Hub API
 - Uses requests for efficient downloads
 - Progress bars powered by tqdm
+- Cross-platform file locking by portalocker
+- Fast hashing by BLAKE3

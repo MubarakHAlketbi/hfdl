@@ -1,3 +1,5 @@
 requests
 huggingface_hub
 tqdm
+portalocker
+blake3

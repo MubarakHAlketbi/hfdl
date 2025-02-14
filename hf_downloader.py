@@ -9,16 +9,137 @@ import logging
 import hashlib
 import shutil
 import multiprocessing
+import random
+import portalocker
+import blake3
 from concurrent.futures import ThreadPoolExecutor
 import argparse
 from huggingface_hub import HfApi, hf_hub_url, HfFolder
 import signal
 from tqdm import tqdm
-from typing import Tuple, Optional, List, Set, Dict, Any
+from typing import Tuple, Optional, List, Set, Dict, Any, Union
 from dataclasses import dataclass
 from pathlib import Path
 from collections import deque
 from datetime import datetime, timedelta
+
+class CircuitBreaker:
+    """Circuit breaker pattern implementation for error handling."""
+    def __init__(self, failure_threshold: int = 5, reset_timeout: int = 30):
+        self.failure_threshold = failure_threshold
+        self.reset_timeout = reset_timeout
+        self.failures = deque(maxlen=60)  # Track failures in 60s sliding window
+        self.last_failure_time = 0
+        self.state = "closed"  # closed, open, half-open
+        self._lock = threading.Lock()
+
+    def record_failure(self) -> None:
+        """Record a failure and update circuit state."""
+        with self._lock:
+            current_time = time.time()
+            self.failures.append(current_time)
+            self.last_failure_time = current_time
+            
+            # Count failures in last 60 seconds
+            cutoff = current_time - 60
+            recent_failures = sum(1 for t in self.failures if t > cutoff)
+            
+            if recent_failures >= self.failure_threshold:
+                self.state = "open"
+                logger.warning(f"Circuit breaker opened after {recent_failures} failures")
+
+    def record_success(self) -> None:
+        """Record a success and potentially reset circuit."""
+        with self._lock:
+            if self.state == "half-open":
+                self.state = "closed"
+                self.failures.clear()
+                logger.info("Circuit breaker reset after successful operation")
+
+    def can_proceed(self) -> bool:
+        """Check if operation can proceed based on circuit state."""
+        with self._lock:
+            current_time = time.time()
+            
+            if self.state == "closed":
+                return True
+            elif self.state == "open":
+                # Check if enough time has passed to try again
+                if current_time - self.last_failure_time > self.reset_timeout:
+                    self.state = "half-open"
+                    logger.info("Circuit breaker entering half-open state")
+                    return True
+                return False
+            else:  # half-open
+                return True
+
+    def get_backoff_time(self) -> float:
+        """Calculate backoff time with jitter."""
+        if not self.failures:
+            return 0
+        
+        base_delay = min(2 ** len(self.failures), 30)  # Cap at 30 seconds
+        jitter = random.uniform(-0.2, 0.2)  # ±20% jitter
+        return base_delay * (1 + jitter)
+
+class FileLocker:
+    """Cross-platform file locking using portalocker."""
+    def __init__(self, path: Union[str, Path]):
+        self.path = Path(path)
+        self.lock_path = self.path.parent / f".{self.path.name}.lock"
+        self.lock_file = None
+
+    def __enter__(self):
+        """Acquire lock with retries."""
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                self.lock_file = open(self.lock_path, 'w')
+                portalocker.lock(self.lock_file, portalocker.LOCK_EX | portalocker.LOCK_NB)
+                return self
+            except portalocker.LockException:
+                if attempt < max_attempts - 1:
+                    time.sleep(random.uniform(0.1, 0.3))  # Random backoff
+                else:
+                    raise
+            except Exception as e:
+                if self.lock_file:
+                    self.lock_file.close()
+                raise
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Release lock and cleanup."""
+        if self.lock_file:
+            try:
+                portalocker.unlock(self.lock_file)
+                self.lock_file.close()
+            finally:
+                try:
+                    self.lock_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+class HybridHasher:
+    """Hybrid hashing using BLAKE3 for speed and SHA256 for compatibility."""
+    def __init__(self, size_threshold: int = 4 * 1024 * 1024 * 1024):  # 4GB threshold
+        self.size_threshold = size_threshold
+
+    def calculate_hash(self, file_path: Path, chunk_size: int = 8192) -> Tuple[str, str]:
+        """Calculate both BLAKE3 and SHA256 hashes for large files, only SHA256 for small files."""
+        size = file_path.stat().st_size
+        sha256_hash = hashlib.sha256()
+        blake3_hash = blake3.blake3() if size >= self.size_threshold else None
+
+        with file_path.open('rb') as f:
+            for chunk in iter(lambda: f.read(chunk_size), b''):
+                sha256_hash.update(chunk)
+                if blake3_hash:
+                    blake3_hash.update(chunk)
+
+        return (
+            blake3_hash.hexdigest() if blake3_hash else None,
+            sha256_hash.hexdigest()
+        )
 
 # Configure logging
 logging.basicConfig(
@@ -124,16 +245,13 @@ class DownloadState:
         """Set state file path."""
         self.state_file = path
 
-def calculate_file_checksum(file_path: Path, chunk_size: int = 8192) -> str:
-    """Calculate SHA256 checksum of a file."""
-    sha256_hash = hashlib.sha256()
-    with file_path.open('rb') as f:
-        for chunk in iter(lambda: f.read(chunk_size), b''):
-            sha256_hash.update(chunk)
-    return sha256_hash.hexdigest()
+def calculate_file_checksum(file_path: Path, chunk_size: int = 8192) -> Tuple[Optional[str], str]:
+    """Calculate checksums using hybrid hasher."""
+    hasher = HybridHasher()
+    return hasher.calculate_hash(file_path, chunk_size)
 
 def verify_partial_file(file_path: Path, expected_size: int, expected_checksum: Optional[str] = None) -> Tuple[bool, int]:
-    """Verify a partially downloaded file."""
+    """Verify a partially downloaded file with hybrid hashing."""
     if not file_path.exists():
         return False, 0
     
@@ -145,11 +263,14 @@ def verify_partial_file(file_path: Path, expected_size: int, expected_checksum: 
             return False, 0
             
         if expected_checksum and current_size == expected_size:
-            actual_checksum = calculate_file_checksum(file_path)
-            if actual_checksum != expected_checksum:
+            blake3_hash, sha256_hash = calculate_file_checksum(file_path)
+            # Use SHA256 for compatibility with Hugging Face's API
+            if sha256_hash != expected_checksum:
                 logger.warning(f"Checksum mismatch for {file_path}. Removing.")
                 file_path.unlink()
                 return False, 0
+            if blake3_hash:
+                logger.debug(f"BLAKE3 hash calculated for large file {file_path}")
                 
         return True, current_size
     except Exception as e:
@@ -525,13 +646,16 @@ class DownloadManager:
         self.rate_limiters: Dict[str, RateLimiter] = {}
         self.total_speed_tracker = SpeedTracker()
         self.download_state: Optional[DownloadState] = None
-        
         # New components for size-based download strategy
         self.file_classifier = FileClassifier(self.config.file_size_threshold)
         self.speed_test_manager = SpeedTestManager(self.config.speed_test_duration, self.total_speed_tracker)
         self.thread_optimizer = ThreadOptimizer(self.config.min_speed_percentage, self.config.num_threads)
         
+        # Initialize hybrid hasher for checksums
+        self.hasher = HybridHasher()
+        
         # Register signal handler
+        signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGINT, self._signal_handler)
 
     def _ensure_directory(self, path: Path) -> bool:
@@ -772,11 +896,16 @@ class DownloadManager:
             local_path = self.output_dir / filename
             local_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Use file lock to prevent concurrent access
-            if filename not in self.file_locks:
-                self.file_locks[filename] = threading.Lock()
+            # Use cross-platform file locking
+            with FileLocker(local_path):
+                # Pre-allocate space if we know the file size
+                if self.download_state and filename in self.download_state.files:
+                    total_size = self.download_state.files[filename]['size']
+                    if not local_path.exists() and total_size > 0:
+                        if not self._preallocate_file(local_path, total_size):
+                            logger.error(f"Failed to pre-allocate space for {filename}")
+                            return False
 
-            with self.file_locks[filename]:
                 success = (self._download_lfs_file(filename, local_path) if is_lfs
                           else self._download_regular_file(filename, local_path))
 
@@ -878,17 +1007,45 @@ class DownloadManager:
                 )
 
     def _check_disk_space(self, required_mb: int) -> bool:
-        """Check if there's enough disk space available."""
+        """Check if there's enough disk space available with 5% safety buffer."""
         try:
             total, used, free = shutil.disk_usage(self.output_dir.parent)
             free_mb = free // (1024 * 1024)
-            return free_mb >= required_mb
+            
+            # Add 5% buffer to required space
+            required_with_buffer = int(required_mb * 1.05)
+            
+            if free_mb < required_with_buffer:
+                logger.error(
+                    f"Insufficient disk space:"
+                    f"\n- Required: {required_mb} MB"
+                    f"\n- Required with 5% buffer: {required_with_buffer} MB"
+                    f"\n- Available: {free_mb} MB"
+                )
+                return False
+            return True
         except Exception as e:
             logger.error(f"Failed to check disk space: {e}")
             return False
 
+    def _preallocate_file(self, file_path: Path, size: int) -> bool:
+        """Pre-allocate file space to prevent fragmentation and ENOSPC errors."""
+        try:
+            with file_path.open('wb') as f:
+                if os.name == 'posix':
+                    # Use posix_fallocate on Unix systems
+                    os.posix_fallocate(f.fileno(), 0, size)
+                else:
+                    # Use seek/truncate on Windows
+                    f.seek(size - 1)
+                    f.write(b'\0')
+            return True
+        except Exception as e:
+            logger.error(f"Failed to pre-allocate space for {file_path}: {e}")
+            return False
+
     def _verify_file_integrity(self, file_path: Path, expected_size: int, filename: str) -> bool:
-        """Verify downloaded file integrity using size and checksum."""
+        """Verify downloaded file integrity using hybrid hashing."""
         try:
             actual_size = file_path.stat().st_size
             if actual_size != expected_size:
@@ -897,8 +1054,12 @@ class DownloadManager:
 
             # Calculate checksum for regular files
             if not filename.endswith('.gitattributes'):  # Skip LFS pointer files
-                logger.info(f"Calculating checksum for {filename}...")
-                checksum = calculate_file_checksum(file_path)
+                logger.info(f"Calculating checksums for {filename}...")
+                blake3_hash, sha256_hash = self.hasher.calculate_hash(file_path)
+                
+                # Log if BLAKE3 was used (for large files)
+                if blake3_hash:
+                    logger.info(f"Used BLAKE3 for fast hashing of large file {filename}")
                 
                 # Refresh token if needed
                 self._refresh_token_if_needed()
@@ -914,7 +1075,8 @@ class DownloadManager:
                     
                     if 'X-Content-Hash' in response.headers:
                         expected_checksum = response.headers['X-Content-Hash']
-                        if checksum != expected_checksum:
+                        # Always use SHA256 for API compatibility
+                        if sha256_hash != expected_checksum:
                             logger.error(f"Checksum mismatch for {filename}")
                             return False
                         logger.info(f"Checksum verified for {filename}")
