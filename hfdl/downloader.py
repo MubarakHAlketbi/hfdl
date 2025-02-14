@@ -23,9 +23,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from collections import deque
 from datetime import datetime
-from . import __version__
 from .config import DownloadConfig
 import sys
+from hfdl import __version__  # Use absolute import for version
 
 logger = logging.getLogger(__name__)
 
