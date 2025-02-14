@@ -263,9 +263,16 @@ class DownloadConfig:
     fix_broken: bool = False  # Remove and redownload corrupted files
     force_download: bool = False  # Force fresh download
     file_size_threshold: int = 200 * 1024 * 1024  # 200MB threshold for big files
-    min_speed_per_thread: int = 3 * 1024 * 1024  # 3MB/s minimum speed per thread
+    min_speed_percentage: float = 5.0  # Target minimum speed per thread as percentage of average speed (1-100)
     speed_test_duration: int = 5  # seconds for initial speed test
     token_refresh_interval: int = 3600  # 1 hour token refresh interval
+
+    def __post_init__(self):
+        """Validate and adjust configuration after initialization."""
+        # Validate speed percentage
+        if not 1.0 <= self.min_speed_percentage <= 100.0:
+            logger.warning(f"Invalid min_speed_percentage {self.min_speed_percentage}%. Must be between 1% and 100%. Using 5%.")
+            self.min_speed_percentage = 5.0
 
     @classmethod
     def calculate_optimal_threads(cls) -> int:
@@ -404,8 +411,8 @@ class SpeedTestManager:
 
 class ThreadOptimizer:
     """Optimizes thread count based on speed requirements."""
-    def __init__(self, min_speed_per_thread: int, max_threads: int):
-        self.min_speed_per_thread = min_speed_per_thread
+    def __init__(self, min_speed_percentage: float, max_threads: int):
+        self.min_speed_percentage = min_speed_percentage
         self.max_threads = max_threads
 
     def calculate_optimal_threads(self, total_speed: float) -> int:
@@ -413,8 +420,14 @@ class ThreadOptimizer:
         if total_speed <= 0:
             return 1
 
+        # Calculate minimum speed per thread as percentage of total speed
+        min_speed_per_thread = (total_speed * self.min_speed_percentage) / 100.0
+        
+        # Ensure minimum speed is not too low (at least 1 MB/s)
+        min_speed_per_thread = max(min_speed_per_thread, 1024 * 1024)
+        
         # Calculate how many threads we can support while maintaining min_speed_per_thread
-        optimal_threads = int(total_speed / self.min_speed_per_thread)
+        optimal_threads = int(total_speed / min_speed_per_thread)
         
         # Ensure we stay within bounds
         optimal_threads = max(1, min(optimal_threads, self.max_threads))
@@ -422,7 +435,8 @@ class ThreadOptimizer:
         logger.info(
             f"Speed-based thread calculation:"
             f"\n- Total speed: {total_speed / (1024*1024):.2f} MB/s"
-            f"\n- Min speed per thread: {self.min_speed_per_thread / (1024*1024):.2f} MB/s"
+            f"\n- Target speed percentage: {self.min_speed_percentage:.1f}%"
+            f"\n- Min speed per thread: {min_speed_per_thread / (1024*1024):.2f} MB/s"
             f"\n- Optimal threads: {optimal_threads}"
         )
         
@@ -515,7 +529,7 @@ class DownloadManager:
         # New components for size-based download strategy
         self.file_classifier = FileClassifier(self.config.file_size_threshold)
         self.speed_test_manager = SpeedTestManager(self.config.speed_test_duration, self.total_speed_tracker)
-        self.thread_optimizer = ThreadOptimizer(self.config.min_speed_per_thread, self.config.num_threads)
+        self.thread_optimizer = ThreadOptimizer(self.config.min_speed_percentage, self.config.num_threads)
         
         # Register signal handler
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -1265,8 +1279,8 @@ def main():
                        help="Force fresh download, ignore existing files")
     parser.add_argument("--file-size-threshold", type=int, default=200,
                        help="Size threshold for big files in MB (default: 200)")
-    parser.add_argument("--min-speed-per-thread", type=int, default=3,
-                       help="Minimum speed per thread in MB/s (default: 3)")
+    parser.add_argument("--min-speed-percentage", type=float, default=5.0,
+                        help="Target minimum speed per thread as percentage of average speed (1-100, default: 5)")
     parser.add_argument("--speed-test-duration", type=int, default=5,
                        help="Duration of speed test in seconds (default: 5)")
     
@@ -1283,7 +1297,7 @@ def main():
         fix_broken=args.fix_broken,
         force_download=args.force,
         file_size_threshold=args.file_size_threshold * 1024 * 1024,  # Convert MB to bytes
-        min_speed_per_thread=args.min_speed_per_thread * 1024 * 1024,  # Convert MB/s to bytes/s
+        min_speed_percentage=args.min_speed_percentage,
         speed_test_duration=args.speed_test_duration
     )
 
