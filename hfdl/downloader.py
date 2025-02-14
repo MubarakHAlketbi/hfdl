@@ -1091,17 +1091,29 @@ class DownloadManager:
             return False
 
     def _parse_lfs_pointer(self, pointer_content: str) -> Tuple[Optional[str], Optional[int]]:
-        """Parse Git LFS pointer file with improved validation and error logging."""
+        """Parse Git LFS pointer file with improved validation and error logging.
+        Handles both LF and CRLF line endings and validates UTF-8 content."""
         try:
             if not pointer_content or not isinstance(pointer_content, str):
                 logger.error("Invalid LFS pointer content: empty or not a string")
                 return None, None
+
+            # Check if content is valid UTF-8 text
+            try:
+                pointer_content.encode('utf-8').decode('utf-8')
+            except UnicodeError:
+                logger.error("LFS pointer contains binary data - not a valid pointer file")
+                return None, None
                 
-            pattern = r"version https://git-lfs\.github\.com/spec/v1\noid sha256:([a-f0-9]{64})\nsize (\d+)"
+            # Allow CRLF line endings in regex
+            pattern = r"version https://git-lfs\.github\.com/spec/v1\r?\noid sha256:([a-f0-9]{64})\r?\nsize (\d+)"
             match = re.match(pattern, pointer_content.strip())
             
             if not match:
                 logger.error(f"LFS pointer format invalid. Content: {pointer_content[:200]}...")  # Log first 200 chars
+                if logger.isEnabledFor(logging.DEBUG):
+                    # Log full content in debug mode for thorough investigation
+                    logger.debug(f"Full pointer content:\n{pointer_content}")
                 return None, None
                 
             try:
@@ -1123,6 +1135,10 @@ class DownloadManager:
             logger.error(f"Error parsing LFS pointer: {str(e)}")
             if pointer_content:
                 logger.debug(f"Problematic content: {pointer_content[:200]}...")
+                if logger.isEnabledFor(logging.DEBUG):
+                    # Log hex dump in debug mode for binary content analysis
+                    hex_dump = ' '.join(f'{b:02x}' for b in pointer_content.encode('utf-8', errors='ignore')[:100])
+                    logger.debug(f"Content hex dump (first 100 bytes): {hex_dump}")
             return None, None
 
     def _download_lfs_file(self, filename: str, local_path: Path) -> bool:
