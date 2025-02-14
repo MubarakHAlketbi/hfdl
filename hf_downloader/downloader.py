@@ -13,7 +13,6 @@ import random
 import portalocker
 import blake3
 from concurrent.futures import ThreadPoolExecutor
-import argparse
 from huggingface_hub import HfApi, hf_hub_url, HfFolder
 import signal
 from tqdm import tqdm
@@ -21,109 +20,91 @@ from typing import Tuple, Optional, List, Set, Dict, Any, Union
 from dataclasses import dataclass
 from pathlib import Path
 from collections import deque
-from datetime import datetime, timedelta
-from typing import Optional, Dict, Any
-import asyncio
-from functools import wraps
+from datetime import datetime
+import sys
+
+logger = logging.getLogger(__name__)
+
+class HFDownloadError(Exception):
+    """Base exception for downloader errors"""
+    pass
 
 class HFDownloader:
     def __init__(
-        self, 
-        model_id: str, 
+        self,
+        model_id: str,
         download_dir: str = "downloads",
-        threads: Optional[int] = None,
-        verify: bool = False
+        num_threads: Union[int, str] = 'auto',
+        repo_type: str = "model",
+        chunk_size: int = 1024*1024,
+        min_free_space: int = 5000,
+        file_size_threshold: int = 200,
+        min_speed_percentage: int = 5,
+        speed_test_duration: int = 5,
+        verify: bool = False,
+        fix_broken: bool = False,
+        force: bool = False
     ):
         self.model_id = model_id
-        self.download_dir = download_dir
-        # Initialize other parameters
+        self.download_dir = Path(download_dir)
+        self.repo_type = repo_type
+        self.config = DownloadConfig(
+            num_threads=num_threads if isinstance(num_threads, int) else 0,
+            chunk_size=chunk_size,
+            min_free_space_mb=min_free_space,
+            file_size_threshold=file_size_threshold * 1024 * 1024,
+            min_speed_percentage=min_speed_percentage,
+            speed_test_duration=speed_test_duration,
+            verify_downloads=verify,
+            fix_broken=fix_broken,
+            force_download=force
+        )
+        self.download_manager = None
+        self.exit_event = threading.Event()
+
+        signal.signal(signal.SIGINT, self._signal_handler)
 
     def download(self):
-        """Main download method for programmatic use"""
-        # Your implementation here
-    
-    async def download_async(self):
-        """Async version of download method"""
-
-    def _ipython_display_(self):
-        """Display progress in Jupyter notebooks"""
-        from IPython.display import display
-        display(self.create_progress_widget())
-
-def handle_errors(fn):
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
+        """Main download method with proper error handling"""
         try:
-            return fn(*args, **kwargs)
+            self.download_manager = DownloadManager(
+                self.model_id,
+                self.download_dir,
+                self.repo_type,
+                self.config
+            )
+            return self.download_manager.download()
         except Exception as e:
-            # Custom error handling
+            logger.error(f"Download failed: {str(e)}")
             raise HFDownloadError(str(e)) from e
-    return wrapper
+        finally:
+            self._cleanup()
 
-def download_model(model_id, **kwargs):
-    """Simplified programmatic interface"""
-    downloader = HFDownloader(model_id, **kwargs)
-    return downloader.download()
+    def _cleanup(self):
+        """Cleanup resources"""
+        if self.download_manager:
+            self.download_manager.exit_event.set()
 
+    def _signal_handler(self, sig, frame):
+        logger.info('Gracefully shutting down...')
+        self.exit_event.set()
+        if self.download_manager:
+            self.download_manager.cleanup_resources()  # Add cleanup method in DownloadManager
+        sys.exit(1)
 
 class CircuitBreaker:
-    """Circuit breaker pattern implementation for error handling."""
-    def __init__(self, failure_threshold: int = 5, reset_timeout: int = 30):
+    def __init__(self, failure_threshold: int = 5):
         self.failure_threshold = failure_threshold
-        self.reset_timeout = reset_timeout
-        self.failures = deque(maxlen=60)  # Track failures in 60s sliding window
-        self.last_failure_time = 0
-        self.state = "closed"  # closed, open, half-open
-        self._lock = threading.Lock()
+        self.failure_count = 0
 
-    def record_failure(self) -> None:
-        """Record a failure and update circuit state."""
-        with self._lock:
-            current_time = time.time()
-            self.failures.append(current_time)
-            self.last_failure_time = current_time
-            
-            # Count failures in last 60 seconds
-            cutoff = current_time - 60
-            recent_failures = sum(1 for t in self.failures if t > cutoff)
-            
-            if recent_failures >= self.failure_threshold:
-                self.state = "open"
-                logger.warning(f"Circuit breaker opened after {recent_failures} failures")
+    def record_failure(self):
+        self.failure_count += 1
+        if self.failure_count >= self.failure_threshold:
+            logger.error("Circuit breaker triggered - too many consecutive failures")
+            raise HFDownloadError("Too many download failures")
 
-    def record_success(self) -> None:
-        """Record a success and potentially reset circuit."""
-        with self._lock:
-            if self.state == "half-open":
-                self.state = "closed"
-                self.failures.clear()
-                logger.info("Circuit breaker reset after successful operation")
-
-    def can_proceed(self) -> bool:
-        """Check if operation can proceed based on circuit state."""
-        with self._lock:
-            current_time = time.time()
-            
-            if self.state == "closed":
-                return True
-            elif self.state == "open":
-                # Check if enough time has passed to try again
-                if current_time - self.last_failure_time > self.reset_timeout:
-                    self.state = "half-open"
-                    logger.info("Circuit breaker entering half-open state")
-                    return True
-                return False
-            else:  # half-open
-                return True
-
-    def get_backoff_time(self) -> float:
-        """Calculate backoff time with jitter."""
-        if not self.failures:
-            return 0
-        
-        base_delay = min(2 ** len(self.failures), 30)  # Cap at 30 seconds
-        jitter = random.uniform(-0.2, 0.2)  # ±20% jitter
-        return base_delay * (1 + jitter)
+    def reset(self):
+        self.failure_count = 0
 
 class FileLocker:
     """Cross-platform file locking using portalocker."""
@@ -319,77 +300,33 @@ def verify_partial_file(file_path: Path, expected_size: int, expected_checksum: 
     except Exception as e:
         logger.error(f"Error verifying file {file_path}: {e}")
         return False, 0
+    
+def handle_errors(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            logger.error(f"Error in {fn.__name__}: {str(e)}")
+            args[0].circuit_breaker.record_failure()
+            raise
+    return wrapper
 
 class SpeedTracker:
-    """Tracks download speed with rolling window."""
     def __init__(self, window_size: int = 5):
-        self.window_size = max(1, window_size)  # Ensure positive window size
+        self.window_size = window_size
         self.bytes_window = deque()
         self.start_time = time.time()
-        self.total_bytes = 0
-        self.min_time_threshold = 0.001  # 1ms minimum time threshold
-        self.last_update = self.start_time
 
     def update(self, bytes_downloaded: int):
-        """Update with new bytes downloaded."""
-        if bytes_downloaded < 0:
-            logger.warning("Negative bytes count received, ignoring")
-            return
-
-        current_time = time.time()
-        # Ensure minimum time between updates
-        if current_time - self.last_update < self.min_time_threshold:
-            current_time = self.last_update + self.min_time_threshold
-            
-        self.bytes_window.append((current_time, bytes_downloaded))
-        self.total_bytes += bytes_downloaded
-        self.last_update = current_time
-        
-        # Remove old entries
-        while (self.bytes_window and
-               current_time - self.bytes_window[0][0] > self.window_size):
+        self.bytes_window.append((time.time(), bytes_downloaded))
+        while self.bytes_window and self.bytes_window[0][0] < time.time() - self.window_size:
             self.bytes_window.popleft()
 
     def get_speed(self) -> float:
-        """Get current speed in bytes per second with improved edge case handling."""
         if not self.bytes_window:
             return 0.0
-        
-        current_time = time.time()
-        window_start = current_time - self.window_size
-        
-        # Sum bytes in window
-        bytes_in_window = sum(bytes_count for timestamp, bytes_count
-                            in self.bytes_window
-                            if timestamp > window_start)
-        
-        # Calculate time difference with minimum threshold
-        oldest_time = max(window_start,
-                         self.bytes_window[0][0] if self.bytes_window else current_time)
-        time_diff = max(self.min_time_threshold, current_time - oldest_time)
-        
-        # Apply smoothing for very small time differences
-        if time_diff < self.min_time_threshold * 10:  # Use 10x threshold for smoothing
-            time_diff = self.min_time_threshold * 10
-        
-        return bytes_in_window / time_diff
-
-    def get_average_speed(self) -> float:
-        """Get average speed since start in bytes per second with minimum threshold."""
-        current_time = time.time()
-        time_diff = max(self.min_time_threshold, current_time - self.start_time)
-        
-        # Apply smoothing for very small time differences
-        if time_diff < self.min_time_threshold * 10:
-            time_diff = self.min_time_threshold * 10
-            
-        return self.total_bytes / time_diff
-
-    def reset(self):
-        """Reset speed tracker."""
-        self.bytes_window.clear()
-        self.start_time = time.time()
-        self.total_bytes = 0
+        return sum(b for t, b in self.bytes_window) / self.window_size
 
 class RateLimiter:
     """Limits download rate per thread."""
@@ -415,132 +352,54 @@ class RateLimiter:
 
 @dataclass
 class DownloadConfig:
-    """Configuration for download operations."""
-    num_threads: int = 4
-    chunk_size: int = 1024 * 1024  # 1MB
-    max_retries: int = 3
-    connect_timeout: int = 10
-    read_timeout: int = 30
-    min_free_space_mb: int = 1000  # Minimum 1GB free space required
-    speed_check_interval: int = 5  # seconds for progress updates
-    verify_downloads: bool = False  # Verify existing downloads
-    fix_broken: bool = False  # Remove and redownload corrupted files
-    force_download: bool = False  # Force fresh download
-    file_size_threshold: int = 200 * 1024 * 1024  # 200MB threshold for big files
-    min_speed_percentage: float = 5.0  # Target minimum speed per thread as percentage of average speed (1-100)
-    speed_test_duration: int = 5  # seconds for initial speed test
-    token_refresh_interval: int = 3600  # 1 hour token refresh interval
+    def __init__(self, **kwargs):
+        self.num_threads = kwargs.get('num_threads', 0)
+        self.chunk_size = kwargs.get('chunk_size', 1024*1024)
+        self.min_free_space_mb = kwargs.get('min_free_space_mb', 5000)
+        self.file_size_threshold = kwargs.get('file_size_threshold', 200*1024*1024)
+        self.min_speed_percentage = max(1, min(100, kwargs.get('min_speed_percentage', 5)))
+        self.speed_test_duration = kwargs.get('speed_test_duration', 5)
+        self.verify_downloads = kwargs.get('verify_downloads', False)
+        self.fix_broken = kwargs.get('fix_broken', False)
+        self.force_download = kwargs.get('force_download', False)
+        self.max_retries = kwargs.get('max_retries', 5)  
+        self.connect_timeout = kwargs.get('connect_timeout', 10)  
+        self.read_timeout = kwargs.get('read_timeout', 30)  
+        self.token_refresh_interval = kwargs.get('token_refresh_interval', 3600) 
+
+        # Calculate optimal threads if auto-detected
+        if self.num_threads <= 0:
+            self.num_threads = self.calculate_optimal_threads()
 
     def __post_init__(self):
-        """Validate and adjust configuration after initialization."""
-        # Validate speed percentage
-        if not 1.0 <= self.min_speed_percentage <= 100.0:
-            logger.warning(f"Invalid min_speed_percentage {self.min_speed_percentage}%. Must be between 1% and 100%. Using 5%.")
-            self.min_speed_percentage = 5.0
+        """Validate configuration after initialization"""
+        if not 1 <= self.min_speed_percentage <= 100:
+            raise ValueError("min_speed_percentage must be between 1-100")
+            
+        if self.file_size_threshold < 0:
+            raise ValueError("file_size_threshold cannot be negative")
 
-    @classmethod
-    def calculate_optimal_threads(cls) -> int:
-        """Calculate optimal number of threads optimized for I/O operations.
-        
-        For I/O bound operations like downloads, we can use more threads than CPU cores
-        since threads spend most time waiting for I/O. However, we still need to be
-        reasonable to avoid system resource exhaustion.
-        
-        Rules:
-        1. Minimum: 1 thread (always guaranteed)
-        2. Maximum: 32 threads (prevent resource exhaustion)
-        3. Default calculation: min(32, max(8, cpu_cores * 4))
-           - Ensures at least 8 threads for I/O operations
-           - Scales with CPU cores but focuses on I/O performance
-           - Caps at 32 to prevent resource exhaustion
-        """
+    @staticmethod
+    def calculate_optimal_threads() -> int:
         cpu_cores = multiprocessing.cpu_count()
-        
-        # Calculate base thread count optimized for I/O
-        base_threads = min(32, max(8, cpu_cores * 4))
-        
-        # Log the calculation process
-        logger.debug(f"Thread calculation:")
-        logger.debug(f"- CPU cores: {cpu_cores}")
-        logger.debug(f"- Base I/O threads: {base_threads}")
-        logger.debug("- Optimization: I/O-bound workload (more threads than cores)")
-        
-        return base_threads
-
-    def __post_init__(self):
-        """Validate and adjust configuration after initialization."""
-        optimal_threads = self.calculate_optimal_threads()
-        
-        logger.info(f"System configuration:")
-        logger.info(f"- CPU cores: {multiprocessing.cpu_count()}")
-        logger.info(f"- Optimal I/O threads: {optimal_threads}")
-        logger.info("- Note: I/O operations benefit from more threads than CPU cores")
-        
-        if self.num_threads > optimal_threads:
-            logger.info(
-                f"Adjusting thread count from {self.num_threads} to {optimal_threads}:"
-                f"\n- This is optimal for I/O-bound operations"
-                f"\n- More threads than CPU cores is normal for downloads"
-                f"\n- Reserved: 1 thread for interruption handling"
-            )
-            self.num_threads = optimal_threads
-        else:
-            logger.info(f"Using requested thread count: {self.num_threads}")
+        return min(32, max(8, cpu_cores * 4))
 
 class FileClassifier:
-    """Classifies files based on size threshold."""
-    def __init__(self, size_threshold: int):
-        self.size_threshold = size_threshold
-        self.small_files: List[Tuple[str, int, bool]] = []
-        self.big_files: List[Tuple[str, int, bool]] = []
-
-    def _get_fallback_size(self, filename: str, repo_id: str, repo_type: str, token: Optional[str] = None) -> int:
-        """Get file size using HEAD request when API returns None."""
+    def _get_fallback_size(self, filename: str) -> int:
+        """Fallback size retrieval when API doesn't provide it"""
         try:
-            # Validate repository ID before making request
-            if not repo_id or not isinstance(repo_id, str):
-                logger.error("Invalid repository ID for fallback size retrieval")
-                return 0
-                
-            # Ensure repo_id has correct format
-            if not re.match(r'^[\w.-]+/[\w.-]+$', repo_id):
-                logger.error(f"Invalid repository ID format: {repo_id}")
-                return 0
-                
-            url = hf_hub_url(repo_id=repo_id, filename=filename, repo_type=repo_type)
-            headers = {"Authorization": f"Bearer {token}"} if token else {}
-            response = requests.head(url, headers=headers, timeout=(10, 30))
-            if response.status_code == 200 and 'Content-Length' in response.headers:
-                return int(response.headers['Content-Length'])
-            elif response.status_code == 404:
-                logger.warning(f"File not found: {filename}")
-                return 0
-            else:
-                logger.warning(f"Failed to get size for {filename}: HTTP {response.status_code}")
-                return 0
+            url = hf_hub_url(repo_id=self.repo_id, filename=filename, repo_type=self.repo_type)
+            response = requests.head(url, timeout=10)
+            return int(response.headers.get('Content-Length', 0))
         except Exception as e:
-            logger.warning(f"Failed to get fallback size for {filename}: {e}")
-            return 0  # Default to small file if size cannot be determined
+            logger.warning(f"Couldn't get size for {filename}: {e}")
+            return 0  # Treat as small file
 
-    def classify_files(self, files: List[Tuple[str, int, bool]], repo_id: str = "",
-                      repo_type: str = "model", token: Optional[str] = None) -> None:
-        """Classify files into small and big based on size threshold."""
-        self.small_files.clear()
-        self.big_files.clear()
-        
+    def classify_files(self, files: List[Tuple[str, int, bool]]):
         for file_info in files:
             filename, size, is_lfs = file_info
-            # Handle null size
-            if size is None or size <= 0:
-                size = self._get_fallback_size(filename, repo_id, repo_type, token)
-                logger.info(f"Using fallback size for {filename}: {size} bytes")
-            
-            if size <= self.size_threshold:
-                self.small_files.append((filename, size, is_lfs))
-            else:
-                self.big_files.append((filename, size, is_lfs))
-        
-        logger.info(f"Classified files: {len(self.small_files)} small files, {len(self.big_files)} big files")
+            if size is None:
+                size = self._get_fallback_size(filename)  # Add fallback
 
 class SpeedTestManager:
     """Manages speed testing for downloads."""
@@ -629,17 +488,24 @@ class DownloadManager:
 
     @staticmethod
     def _get_auth_token() -> Optional[str]:
-        """Safely retrieve authentication token using HfFolder."""
-        try:
-            token = HfFolder.get_token()
-            if token:
-                logger.debug("Authentication token found")
-            else:
-                logger.debug("No authentication token available")  # Debug level since this is ok for public repos
-            return token
-        except Exception as e:
-            logger.debug(f"Error retrieving auth token: {e}")
-            return None
+        token = HfFolder.get_token()
+        if token:
+            logger.info("Using authentication token")
+            # Mask token in logs
+            logger.debug(f"Using token starting with: {token[:4]}...") 
+        return token
+
+    def __enter__(self):
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.cleanup_resources()
+        
+    def cleanup_resources(self):
+        """Proper cleanup of network connections and file locks"""
+        self.exit_event.set()
+        if hasattr(self, 'executor'):
+            self.executor.shutdown(wait=False)
 
     def _signal_handler(self, sig, frame):
         """Handle interrupt signal."""
@@ -672,33 +538,22 @@ class DownloadManager:
         if any(t.get_speed() > 0 for t in self.speed_trackers.values()):
             logger.warning("Some downloads are still active. State will be saved but some files may be incomplete.")
 
-    def __init__(self, repo_id: str, output_dir: str, repo_type: str = "model",
-                 config: Optional[DownloadConfig] = None):
+    def __init__(self, repo_id: str, output_dir: Path, repo_type: str, config: DownloadConfig):
         self.repo_id = self._normalize_repo_id(repo_id)
-        self.model_name = self.repo_id.split("/")[-1]
-        self.output_dir = Path(output_dir) / self.model_name
+        self.output_dir = output_dir / self.repo_id.split('/')[-1]
         self.repo_type = repo_type
-        self.config = config or DownloadConfig()
+        self.config = config
         self.exit_event = threading.Event()
-        self.completed_files: Set[str] = set()
+        self.completed_files = set()
         self.download_queue = queue.Queue()
         self.file_locks = {}
-        self.dir_locks = {}  # Directory creation locks
-        self.token = None  # Initialize without token, will get if needed
-        self.speed_trackers: Dict[str, SpeedTracker] = {}
-        self.rate_limiters: Dict[str, RateLimiter] = {}
-        self.total_speed_tracker = SpeedTracker()
-        self.download_state: Optional[DownloadState] = None
-        # New components for size-based download strategy
+        self.token = None
+        self.speed_tracker = SpeedTracker()
+        self.download_state = None
+
+        # Initialize components
         self.file_classifier = FileClassifier(self.config.file_size_threshold)
-        self.speed_test_manager = SpeedTestManager(self.config.speed_test_duration, self.total_speed_tracker)
-        self.thread_optimizer = ThreadOptimizer(self.config.min_speed_percentage, self.config.num_threads)
-        
-        # Initialize hybrid hasher for checksums
-        self.hasher = HybridHasher()
-        
-        # Register signal handler
-        signal.signal(signal.SIGINT, self._signal_handler)
+        self.circuit_breaker = CircuitBreaker()
         signal.signal(signal.SIGINT, self._signal_handler)
 
     def _ensure_directory(self, path: Path) -> bool:
@@ -966,25 +821,29 @@ class DownloadManager:
             with local_path.open('ab') as f:
                 with tqdm(total=total_size, initial=existing_size, unit='B',
                          unit_scale=True, unit_divisor=1024, desc=filename) as pbar:
-                    for chunk in response.iter_content(chunk_size=self.config.chunk_size):
-                        if self.exit_event.is_set():
-                            return False
-                        if chunk:
-                            self._process_chunk(chunk, filename)
-                            f.write(chunk)
-                            chunk_size = len(chunk)
-                            pbar.update(chunk_size)
-                            
-                            # Update download state
-                            if self.download_state:
-                                current_size = existing_size + pbar.n
-                                self.download_state.update_file(
-                                    filename, current_size, 'in_progress'
-                                )
-                            
-                            # Periodically update rate limiters
-                            if time.time() % self.config.speed_check_interval < 1:
-                                self._update_rate_limiters()
+                    try:
+                        for chunk in response.iter_content(chunk_size=self.config.chunk_size):
+                            if self.exit_event.is_set():
+                                return False
+                            if chunk:
+                                self._process_chunk(chunk, filename)
+                                f.write(chunk)
+                                chunk_size = len(chunk)
+                                pbar.update(chunk_size)
+                                
+                                # Update download state
+                                if self.download_state:
+                                    current_size = existing_size + pbar.n
+                                    self.download_state.update_file(
+                                        filename, current_size, 'in_progress'
+                                    )
+                                
+                                # Periodically update rate limiters
+                                if time.time() % self.config.speed_check_interval < 1:
+                                    self._update_rate_limiters()
+                    except Exception as e:
+                        pbar.close()
+                        raise
             
             # Update final state
             if self.download_state:
@@ -1363,101 +1222,37 @@ class DownloadManager:
             self.token_last_refresh = current_time
 
     def download(self) -> bool:
-        """Main download method with size-based download strategy and token refresh."""
+        """Main download workflow with enhanced error handling"""
         try:
-            # Initialize token refresh time
-            self.token_last_refresh = time.time()
-            
-            # Validate repository ID format
-            try:
-                self.repo_id = self._normalize_repo_id(self.repo_id)
-            except ValueError as e:
-                logger.error(f"Repository ID validation failed: {e}")
+            if not self._initialize():
                 return False
-            
-            # Try to access repository (first without token, then with if needed)
-            repo_info = self._try_repo_access()
-            if not repo_info:
+
+            files = self._get_file_list()
+            if not files:
+                logger.error("No files found for download")
                 return False
-                
-            # Store token if we needed it for access
-            self.token = getattr(repo_info, '_token', None)
-            
-            # Refresh token if needed before starting downloads
-            self._refresh_token_if_needed()
 
-            # Get optimal thread count based on system capabilities
-            optimal_threads = self._get_optimal_threads()
-            self.config.num_threads = optimal_threads
-
-            # Get file list
-            files = [(file.rfilename, file.size, file.lfs is not None)
-                    for file in repo_info.siblings]
-            
-            try:
-                # Initialize or load state
-                self._initialize_state(files)
-            except Exception as e:
-                logger.warning(f"Failed to initialize state: {e}")
-                logger.info("Creating fresh state and checking existing files...")
-                
-                # Create output directory
-                self.output_dir.mkdir(parents=True, exist_ok=True)
-                
-                # Create new state without trying to load existing
-                self.download_state = DownloadState.create_new(self.repo_id, files)
-                self.download_state.set_state_file(self.output_dir / '.download_state')
-                
-                # Always verify files when state initialization failed
-                logger.info("Verifying any existing files...")
-                self._verify_existing_files()
-                
-                # Try to save new state
-                try:
-                    self.download_state.save()
-                except Exception as save_error:
-                    logger.warning(f"Could not save state file: {save_error}")
-                    logger.info("Continuing without state persistence...")
-
-            # Classify files by size
-            self.file_classifier.classify_files([f for f in files if f[0] not in self.completed_files])
-            
-            if not self.file_classifier.small_files and not self.file_classifier.big_files:
-                logger.info("All files already downloaded and verified")
-                return True
-
-            logger.info(f"Found {len(files)} files in repository '{self.repo_id}'")
-            logger.info(f"Downloading to: {self.output_dir}")
-
-            # Download small files first using all available threads
-            if self.file_classifier.small_files:
-                logger.info(f"Starting download of {len(self.file_classifier.small_files)} small files...")
-                if not self._download_small_files(self.file_classifier.small_files):
-                    return False
-
-            # Handle big files
-            if self.file_classifier.big_files:
-                logger.info(f"Starting download of {len(self.file_classifier.big_files)} big files...")
-                
-                # Test download speed with first big file
-                if len(self.file_classifier.big_files) > 0:
-                    logger.info("Testing download speed with first big file...")
-                    avg_speed = self._test_download_speed(self.file_classifier.big_files[0])
-                    
-                    # Calculate optimal thread count based on speed test
-                    optimal_threads = self.thread_optimizer.calculate_optimal_threads(avg_speed)
-                    
-                    # Download remaining big files with optimized thread count
-                    remaining_files = self.file_classifier.big_files[1:]
-                    if remaining_files:
-                        if not self._download_big_files(remaining_files, optimal_threads):
-                            return False
-
-            logger.info("Download completed successfully")
-            return True
-
+            self._classify_files(files)
+            return self._download_files()
         except Exception as e:
-            logger.error(f"Download failed: {e}")
+            logger.error(f"Download failed: {str(e)}")
+            raise
+
+    def _initialize(self) -> bool:
+        """Initialize the download environment"""
+        try:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Check disk space upfront
+            if not self._check_disk_space(1024):  # Check minimum 1GB
+                return False
+
+            # Get authentication token
+            self.token = HfFolder.get_token()
+            
+            return True
+        except Exception as e:
+            logger.error(f"Initialization failed: {str(e)}")
             return False
 
 def main():
@@ -1488,7 +1283,12 @@ def main():
                         help="Target minimum speed per thread as percentage of average speed (1-100, default: 5)")
     parser.add_argument("--speed-test-duration", type=int, default=5,
                        help="Duration of speed test in seconds (default: 5)")
-    
+    parser.add_argument("--max-retries", type=int, default=5,
+                       help="Maximum download retry attempts")
+    parser.add_argument("--connect-timeout", type=int, default=10,
+                       help="Connection timeout in seconds")
+    parser.add_argument("--read-timeout", type=int, default=30,
+                       help="Read timeout in seconds")
     args = parser.parse_args()
 
     if not args.repo_id_or_url:
@@ -1503,7 +1303,10 @@ def main():
         force_download=args.force,
         file_size_threshold=args.file_size_threshold * 1024 * 1024,  # Convert MB to bytes
         min_speed_percentage=args.min_speed_percentage,
-        speed_test_duration=args.speed_test_duration
+        speed_test_duration=args.speed_test_duration,
+        max_retries=args.max_retries,
+        connect_timeout=args.connect_timeout,
+        read_timeout=args.read_timeout
     )
 
     manager = DownloadManager(
