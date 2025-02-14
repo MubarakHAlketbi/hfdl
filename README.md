@@ -111,6 +111,7 @@ python hf_downloader.py username/model_name --file-size-threshold 500 --min-spee
 - `--file-size-threshold`: Size threshold for big files in MB (default: 200)
 - `--min-speed-percentage`: Target minimum speed per thread as percentage of average speed (1-100, default: 5)
 - `--speed-test-duration`: Duration of speed test in seconds (default: 5)
+- `--speed-check-interval`: Interval for speed checks and rate limiting updates in seconds (default: 5)
 
 ## Download Strategy
 
@@ -143,27 +144,28 @@ The tool implements an intelligent size-based download strategy:
    - Improved error reporting
 
 ## Thread Management
-
-The tool uses an I/O-optimized thread allocation strategy:
+The tool uses an intelligent thread allocation strategy optimized for different system sizes:
 
 1. **Small Files**:
-   - Uses optimal thread count for I/O operations
-   - Maximum parallel downloads
+   - Uses optimal thread count based on system capabilities
+   - Conservative allocation for low-core systems (1-2 cores: 2-4 threads)
+   - Balanced allocation for medium systems (3-8 cores: 2x cores)
+   - Scaled allocation for high-core systems (>8 cores: 3x cores, max 32)
    - Quick completion of small files
-   - Clear I/O vs CPU thread distinction
 
 2. **Big Files**:
    - Initial single-thread speed test
    - Dynamic thread allocation based on speed
    - Each thread gets configurable percentage of total speed
-   - Minimum speed safeguards
+   - Minimum speed safeguards (3 MB/s per thread)
    - Adaptive performance optimization
 
 3. **System Resources**:
-   - I/O-optimized thread scaling
+   - Smart thread scaling based on CPU cores
    - Network-aware thread management
    - Dynamic performance adjustment
-   - Resource monitoring
+   - Resource monitoring with safety limits
+   - Cross-platform file locking
    - Cross-platform file locking
 
 ## Speed Management
