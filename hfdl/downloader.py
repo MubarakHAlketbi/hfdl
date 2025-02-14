@@ -1098,22 +1098,52 @@ class DownloadManager:
                 logger.error("Invalid LFS pointer content: empty or not a string")
                 return None, None
 
-            # Check if content is valid UTF-8 text
+            # Check for common model content markers that indicate this is not an LFS pointer
+            model_content_markers = [
+                "<unk>", "<s>", "</s>", "[INST]", "[/INST]",  # Model tokens
+                "import ", "def ", "class ",  # Code
+                "<?xml", "<!DOCTYPE", "<html",  # Markup
+                "[MASK]", "[SEP]", "[CLS]", "[PAD]"  # Special tokens
+            ]
+            
+            if any(marker in pointer_content for marker in model_content_markers):
+                logger.error("Content appears to be model data, not an LFS pointer")
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"Detected model content markers in:\n{pointer_content[:200]}")
+                return None, None
+
+            # Strict UTF-8 validation with additional checks
             try:
-                pointer_content.encode('utf-8').decode('utf-8')
+                # Check for NULL bytes which shouldn't be in a text file
+                if '\x00' in pointer_content:
+                    logger.error("LFS pointer contains NULL bytes - likely binary content")
+                    return None, None
+                    
+                # Validate as UTF-8 and check for control characters
+                decoded = pointer_content.encode('utf-8').decode('utf-8')
+                if any(ord(c) < 32 and c not in '\r\n\t' for c in decoded):
+                    logger.error("LFS pointer contains invalid control characters")
+                    return None, None
+                    
             except UnicodeError:
-                logger.error("LFS pointer contains binary data - not a valid pointer file")
+                logger.error("LFS pointer contains invalid UTF-8 data")
+                if logger.isEnabledFor(logging.DEBUG):
+                    # Log hex dump for analysis
+                    hex_dump = ' '.join(f'{b:02x}' for b in pointer_content.encode('utf-8', errors='ignore')[:100])
+                    logger.debug(f"Content hex dump (first 100 bytes): {hex_dump}")
                 return None, None
                 
-            # Allow CRLF line endings in regex
-            pattern = r"version https://git-lfs\.github\.com/spec/v1\r?\noid sha256:([a-f0-9]{64})\r?\nsize (\d+)"
+            # Validate LFS pointer format with strict pattern
+            pattern = r"^version https://git-lfs\.github\.com/spec/v1\r?\noid sha256:([a-f0-9]{64})\r?\nsize (\d+)\r?\n?$"
             match = re.match(pattern, pointer_content.strip())
             
             if not match:
-                logger.error(f"LFS pointer format invalid. Content: {pointer_content[:200]}...")  # Log first 200 chars
+                logger.error("LFS pointer format invalid")
                 if logger.isEnabledFor(logging.DEBUG):
-                    # Log full content in debug mode for thorough investigation
-                    logger.debug(f"Full pointer content:\n{pointer_content}")
+                    logger.debug(f"Invalid content:\n{pointer_content}")
+                    # Log hex dump for non-printable characters
+                    hex_dump = ' '.join(f'{b:02x}' for b in pointer_content.encode('utf-8', errors='ignore')[:100])
+                    logger.debug(f"Content hex dump (first 100 bytes): {hex_dump}")
                 return None, None
                 
             try:
