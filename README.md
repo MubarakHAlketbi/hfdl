@@ -11,15 +11,18 @@ A fast, reliable, and safe downloader for Hugging Face models and datasets. This
   * Real-time speed statistics
   * Progress tracking
   * Verified resume capability
+  * Fallback size retrieval for API issues
 - 💻 **Resource Aware**: 
   * I/O optimized thread management
   * Reserved thread for system responsiveness
   * Network bandwidth control
   * System load optimization
   * Per-thread performance tracking
+  * Directory creation locks
 - 🔒 **Smart Authentication**:
   * Works with public repositories without token
   * Secure token handling for private repos
+  * Automatic token refresh
   * Clear authentication guidance
   * Safe token management
   * Graceful auth failures
@@ -27,14 +30,16 @@ A fast, reliable, and safe downloader for Hugging Face models and datasets. This
   * Automatic model-specific directory structure
   * Clean file organization
   * Verified resume capability
-  * State persistence
+  * State persistence with schema validation
   * Progress tracking
+  * Race condition prevention
 - 🛡️ **Safe Operations**: 
   * Comprehensive file integrity checks
-  * Checksum validation
+  * Multiple checksum validation methods
   * Network saturation prevention
   * Graceful interruption handling
   * Clean state management
+  * Edge case handling
 
 ## Requirements
 
@@ -113,23 +118,27 @@ The tool implements an intelligent size-based download strategy:
    - Small files (<200MB by default)
    - Big files (>200MB by default)
    - Configurable size threshold
+   - Fallback size retrieval for API issues
 
 2. **Download Priority**:
    - Small files downloaded first using all threads
    - Big files processed after small files complete
    - Ensures efficient resource utilization
+   - Handles missing file sizes gracefully
 
 3. **Speed Optimization**:
    - Initial speed test for first big file
    - Dynamic thread allocation based on speed
    - Maintains minimum speed per thread
    - Adaptive performance optimization
+   - Edge case handling for speed calculations
 
 4. **Progress Tracking**:
    - Real-time speed statistics
    - Per-file progress monitoring
    - Thread utilization tracking
    - Clear status updates
+   - Improved error reporting
 
 ## Thread Management
 
@@ -139,18 +148,21 @@ The tool uses an I/O-optimized thread allocation strategy:
    - Uses optimal thread count for I/O operations
    - Maximum parallel downloads
    - Quick completion of small files
+   - Clear I/O vs CPU thread distinction
 
 2. **Big Files**:
    - Initial single-thread speed test
    - Dynamic thread allocation based on speed
    - Ensures minimum speed per thread
    - Adaptive performance optimization
+   - Improved thread messaging
 
 3. **System Resources**:
    - I/O-optimized thread scaling
    - Network-aware thread management
    - Dynamic performance adjustment
    - Resource monitoring
+   - Directory operation locks
 
 ## Speed Management
 
@@ -161,49 +173,46 @@ The tool implements an advanced speed optimization system:
    - Average speed calculation
    - Thread optimization based on speed
    - Minimum speed guarantees
+   - Edge case handling
 
 2. **Thread Allocation**:
    - Dynamic thread count for big files
    - Based on speed test results
    - Maintains minimum speed per thread
    - Ensures optimal performance
+   - Improved error handling
 
 3. **Progress Tracking**:
    - Real-time speed statistics
    - Active thread monitoring
    - Overall progress tracking
    - Clear status updates
+   - Better error reporting
 
-## Interrupt Handling
+## State Management
 
-The tool provides robust interrupt handling and progress tracking:
+The tool provides robust state management:
 
-1. **Safe Interruption**:
-   - Press Ctrl+C to safely stop downloads
-   - Current progress is saved automatically
-   - Partial downloads are preserved
-   - Clear status messages provided
+1. **State Validation**:
+   - Schema validation for state files
+   - Corruption detection and recovery
+   - Safe state persistence
+   - Clear error reporting
+   - Automatic recovery mechanisms
 
-2. **Progress Information**:
-   ```
-   Download speeds - Current: 25.5 MB/s, Average: 22.3 MB/s
-   Thread usage - Active: 8, Average speed per thread: 3.2 MB/s
-   ```
+2. **Token Management**:
+   - Automatic token refresh
+   - Configurable refresh intervals
+   - Safe token handling
+   - Clear authentication errors
+   - Graceful token updates
 
-3. **Interrupt Status**:
-   ```
-   Download interrupted: 3/10 files completed (30.0%), 2 files in progress
-   Active downloads being stopped:
-   - model.safetensors: 1.2GB/4.8GB (25.0%)
-   - config.json: 45KB/45KB (100.0%)
-   ```
-
-4. **Resume Support**:
-   ```bash
-   # Resume interrupted download
-   python hf_downloader.py username/model_name
-   # Will continue from where it left off with verified resume
-   ```
+3. **File Integrity**:
+   - Multiple checksum verification methods
+   - Fallback to model index SHA
+   - Size verification
+   - Partial file validation
+   - Clear integrity reporting
 
 ## Directory Structure
 
@@ -229,24 +238,28 @@ downloads/
    - Allow speed testing for big files
    - Use default thread optimization
    - Monitor download progress
+   - Handle edge cases gracefully
 
 2. **Configuration**:
    - Adjust file size threshold based on network
    - Set minimum speed based on connection
    - Allow dynamic thread allocation
    - Monitor performance metrics
+   - Use appropriate timeouts
 
 3. **System Resources**:
    - Tool manages threads optimally for I/O
    - Prevents system overload
    - Maintains responsiveness
    - Enables safe interruption
+   - Handles directory permissions
 
 4. **Interruptions**:
    - Safe to interrupt with Ctrl+C
    - Progress is saved automatically
    - Downloads can be resumed safely
    - State is properly maintained
+   - Clear error reporting
 
 ## Contributing
 
