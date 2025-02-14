@@ -56,46 +56,69 @@ A fast, reliable, and safe downloader for Hugging Face models and datasets. This
 
 ## Installation
 
-1. Clone the repository:
+You can install the package directly from PyPI:
+
 ```bash
-git clone <repository-url>
-cd <repository-name>
+pip install hf-downloader
 ```
 
-2. Install dependencies:
+Or install from source:
+
 ```bash
-pip install -r requirements.txt
+git clone https://github.com/MubarakHAlketbi/hf_downloader.git
+cd hf_downloader
+pip install -e .
 ```
 
-3. (Optional) Set up authentication:
+Authentication (Optional):
 ```bash
 huggingface-cli login
 # Follow prompts to enter your token
 ```
 
+Requirements:
+- Python 3.10 or higher
+- Network connectivity
+- Sufficient disk space for downloads
+
 ## Usage
 
-### Basic Usage
+### Usage
 
+1. Command Line Interface:
 ```bash
-# Download public model (no authentication needed)
-python hf_downloader.py username/model_name
+# Basic usage
+hf_downloader username/model_name
 
-# Download private model (will use token if needed)
-python hf_downloader.py username/private-model
+# Advanced options
+hf_downloader username/model_name \
+    -t 8 \                          # Number of threads
+    -d custom_dir \                 # Custom download directory
+    --min-free-space 2000 \        # Minimum free space in MB
+    --verify \                      # Verify downloads
+    --fix-broken \                  # Fix broken files
+    --file-size-threshold 500       # Size threshold in MB
 ```
 
-### Advanced Usage
+2. Python API:
+```python
+from hf_downloader import HFDownloader
 
-```bash
-# Custom configuration
-python hf_downloader.py username/model_name -t 8 -d custom_dir --min-free-space 2000
+# Basic usage
+downloader = HFDownloader("username/model_name")
+downloader.download()
 
-# Verify and fix downloads
-python hf_downloader.py username/model_name --verify --fix-broken
-
-# Performance tuning
-python hf_downloader.py username/model_name --file-size-threshold 500 --min-speed-percentage 10
+# Advanced configuration
+downloader = HFDownloader(
+    model_id="username/model_name",
+    download_dir="custom_dir",
+    num_threads=8,
+    min_free_space=2000,
+    verify=True,
+    fix_broken=True,
+    file_size_threshold=500
+)
+downloader.download()
 ```
 
 ### Command Line Options
