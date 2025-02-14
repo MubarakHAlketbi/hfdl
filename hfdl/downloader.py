@@ -1208,19 +1208,43 @@ class DownloadManager:
                     existing_size = 0
 
             # Get file size from server
-            response = self._download_with_retry(url, headers=headers, 
+            response = self._download_with_retry(url, headers=headers,
                                             timeout=(self.config.connect_timeout, self.config.read_timeout),
                                             stream=False)
             total_size = int(response.headers.get('Content-Length', 0))
-            
+
+            # Handle existing file state
+            if local_path.exists():
+                # Verify existing file and get valid size
+                valid, existing_size = verify_partial_file(
+                    local_path,
+                    total_size,  # Use server-reported size for validation
+                    self.download_state.files[filename].get('checksum')
+                )
+                
+                # Handle different size scenarios
+                if existing_size == total_size:
+                    logger.info(f"File already complete: {filename}")
+                    return True  # Skip download
+                elif existing_size > total_size:
+                    logger.warning(f"Truncating oversized file: {filename} ({existing_size} > {total_size})")
+                    local_path.unlink()
+                    existing_size = 0
+                elif not valid and self.config.fix_broken:
+                    logger.info(f"Removing corrupted file: {filename}")
+                    local_path.unlink()
+                    existing_size = 0
+
             # Check disk space with safety buffer
             required_mb = (total_size - existing_size) // (1024 * 1024)
             if not self._check_disk_space(required_mb + self.config.min_free_space_mb):
                 return False
 
-            # Set up resume headers if needed
-            if existing_size > 0:
+            # Only set range header if we have valid partial download
+            if 0 < existing_size < total_size:
                 headers["Range"] = f"bytes={existing_size}-"
+            else:
+                existing_size = 0  # Reset if invalid range
                 
             # Download file with resume support
             with self._download_with_retry(url, headers=headers,
