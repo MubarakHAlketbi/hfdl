@@ -15,7 +15,7 @@ import portalocker
 import blake3
 from functools import wraps
 from concurrent.futures import ThreadPoolExecutor
-from huggingface_hub import HfApi, hf_hub_url, HfFolder
+from huggingface_hub import HfApi, hf_hub_url, get_token
 import signal
 from tqdm import tqdm
 from typing import Tuple, Optional, List, Set, Dict, Any, Union
@@ -500,7 +500,7 @@ class DownloadManager:
     @staticmethod
     def _get_auth_token() -> Optional[str]:
         """Get and validate Hugging Face authentication token"""
-        token = HfFolder.get_token()
+        token = get_token()  # New preferred method from huggingface_hub
         if not token:
             logger.warning("No authentication token found. Some repositories may be inaccessible.")
             logger.info("To authenticate, run: huggingface-cli login")
@@ -1351,8 +1351,8 @@ class DownloadManager:
             if not self._check_disk_space(1024):  # Check minimum 1GB
                 return False
 
-            # Get authentication token
-            self.token = HfFolder.get_token()
+            # Get authentication token using modern method
+            self.token = get_token()  # New preferred method from huggingface_hub
             
             return True
         except Exception as e:
