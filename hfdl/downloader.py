@@ -69,15 +69,23 @@ class HFDownloader:
         signal.signal(signal.SIGINT, self._signal_handler)
 
     def _get_file_list(self) -> List[Tuple[str, int, bool]]:
-        """Retrieve file list from Hugging Face Hub.
+        """Retrieve file list from Hugging Face Hub using repo_info.
         
         Returns:
             List of tuples containing (filename, size, is_lfs)
         """
         try:
             api = HfApi()
-            files = api.list_files_info(self.model_id, repo_type=self.repo_type, token=self._get_auth_token())
-            return [(f.rfilename, f.size, f.lfs is not None) for f in files]
+            repo_info = api.repo_info(
+                repo_id=self.model_id,
+                repo_type=self.repo_type,
+                token=self._get_auth_token(),
+                files_metadata=True
+            )
+            return [
+                (sibling.rfilename, sibling.size, sibling.lfs is not None)
+                for sibling in repo_info.siblings
+            ]
         except Exception as e:
             logger.error(f"Failed to get file list: {str(e)}")
             raise HFDownloadError(f"Failed to get file list: {str(e)}") from e
@@ -613,6 +621,7 @@ class DownloadManager:
             duration=config.speed_test_duration,
             speed_tracker=SpeedTracker()
         )
+        self.hasher = HybridHasher()  # Add missing hasher initialization
 
         # Initialize components
         self.file_classifier = FileClassifier(
@@ -1315,12 +1324,19 @@ class DownloadManager:
             raise
 
     def _get_file_list(self) -> List[Tuple[str, int, bool]]:
-        """Retrieve file list from Hugging Face Hub."""
+        """Retrieve file list from Hugging Face Hub using repo_info."""
         try:
             api = HfApi()
-            # CORRECTED: Use self.repo_id instead of self.model_id
-            files = api.list_files_info(self.repo_id, repo_type=self.repo_type, token=self._get_auth_token())
-            return [(f.rfilename, f.size, f.lfs is not None) for f in files]
+            repo_info = api.repo_info(
+                repo_id=self.repo_id,
+                repo_type=self.repo_type,
+                token=self._get_auth_token(),
+                files_metadata=True
+            )
+            return [
+                (sibling.rfilename, sibling.size, sibling.lfs is not None)
+                for sibling in repo_info.siblings
+            ]
         except Exception as e:
             logger.error(f"Failed to get file list: {str(e)}")
             raise HFDownloadError(f"Failed to get file list: {str(e)}") from e
