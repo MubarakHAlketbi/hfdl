@@ -6,12 +6,12 @@ A fast, reliable, and safe downloader for Hugging Face models and datasets. This
 
 - 🚀 **Smart Downloads**:
   * Size-based download strategy (small files first)
-  * Dynamic thread allocation for big files
-  * Speed testing for optimal performance
+  * Dynamic thread allocation based on speed
+  * Percentage-based speed allocation per thread
   * Real-time speed statistics
   * Progress tracking
   * Verified resume capability
-  * Fallback size retrieval for API issues
+  * Fallback size retrieval
 - 💻 **Resource Aware**: 
   * I/O optimized thread management
   * Reserved thread for system responsiveness
@@ -93,7 +93,7 @@ python hf_downloader.py username/model_name -t 8 -d custom_dir --min-free-space 
 python hf_downloader.py username/model_name --verify --fix-broken
 
 # Performance tuning
-python hf_downloader.py username/model_name --file-size-threshold 500 --min-speed-per-thread 5
+python hf_downloader.py username/model_name --file-size-threshold 500 --min-speed-percentage 10
 ```
 
 ### Command Line Options
@@ -107,7 +107,7 @@ python hf_downloader.py username/model_name --file-size-threshold 500 --min-spee
 - `--fix-broken`: Remove and redownload corrupted files
 - `--force`: Force fresh download, ignore existing files
 - `--file-size-threshold`: Size threshold for big files in MB (default: 200)
-- `--min-speed-per-thread`: Minimum speed per thread in MB/s (default: 3)
+- `--min-speed-percentage`: Target minimum speed per thread as percentage of average speed (1-100, default: 5)
 - `--speed-test-duration`: Duration of speed test in seconds (default: 5)
 
 ## Download Strategy
@@ -129,9 +129,9 @@ The tool implements an intelligent size-based download strategy:
 3. **Speed Optimization**:
    - Initial speed test for first big file
    - Dynamic thread allocation based on speed
-   - Maintains minimum speed per thread
+   - Percentage-based speed allocation per thread
+   - Minimum 1 MB/s per thread safeguard
    - Adaptive performance optimization
-   - Edge case handling for speed calculations
 
 4. **Progress Tracking**:
    - Real-time speed statistics
@@ -153,9 +153,9 @@ The tool uses an I/O-optimized thread allocation strategy:
 2. **Big Files**:
    - Initial single-thread speed test
    - Dynamic thread allocation based on speed
-   - Ensures minimum speed per thread
+   - Each thread gets configurable percentage of total speed
+   - Minimum speed safeguards
    - Adaptive performance optimization
-   - Improved thread messaging
 
 3. **System Resources**:
    - I/O-optimized thread scaling
@@ -172,15 +172,15 @@ The tool implements an advanced speed optimization system:
    - Initial speed test for big files
    - Average speed calculation
    - Thread optimization based on speed
-   - Minimum speed guarantees
+   - Percentage-based speed allocation
    - Edge case handling
 
 2. **Thread Allocation**:
    - Dynamic thread count for big files
    - Based on speed test results
-   - Maintains minimum speed per thread
+   - Each thread gets X% of total speed (configurable)
+   - Minimum speed safeguards
    - Ensures optimal performance
-   - Improved error handling
 
 3. **Progress Tracking**:
    - Real-time speed statistics
@@ -242,7 +242,7 @@ downloads/
 
 2. **Configuration**:
    - Adjust file size threshold based on network
-   - Set minimum speed based on connection
+   - Set min-speed-percentage based on stability needs
    - Allow dynamic thread allocation
    - Monitor performance metrics
    - Use appropriate timeouts
