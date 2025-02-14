@@ -1,4 +1,4 @@
-# HFDL - Hugging Face Download Manager
+# HFDL - Hugging Face Download Manager (v0.1.1)
 
 A fast, reliable, and safe downloader for Hugging Face models and datasets. This tool provides better performance than git and huggingface_hub while ensuring safe downloads and intelligent resource management.
 
