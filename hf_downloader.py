@@ -59,16 +59,55 @@ class DownloadState:
                 }, f)
 
     @classmethod
+    def validate_schema(cls, data: Dict) -> bool:
+        """Validate state file schema."""
+        try:
+            if not isinstance(data, dict):
+                return False
+            if 'repo_id' not in data or not isinstance(data['repo_id'], str):
+                return False
+            if 'files' not in data or not isinstance(data['files'], dict):
+                return False
+            
+            for filename, file_info in data['files'].items():
+                if not isinstance(filename, str):
+                    return False
+                if not isinstance(file_info, dict):
+                    return False
+                required_fields = {'size', 'is_lfs', 'status', 'downloaded'}
+                if not all(field in file_info for field in required_fields):
+                    return False
+                if not isinstance(file_info['size'], int):
+                    return False
+                if not isinstance(file_info['is_lfs'], bool):
+                    return False
+                if not isinstance(file_info['status'], str):
+                    return False
+                if not isinstance(file_info['downloaded'], int):
+                    return False
+            return True
+        except Exception:
+            return False
+
+    @classmethod
     def load(cls, state_file: Path) -> Optional['DownloadState']:
-        """Load state from file."""
+        """Load state from file with schema validation."""
         try:
             with state_file.open() as f:
                 data = json.load(f)
-                state = cls(data['repo_id'], data['files'])
-                state.state_file = state_file
-                return state
+                
+            if not cls.validate_schema(data):
+                logger.error("Invalid state file schema")
+                return None
+                
+            state = cls(data['repo_id'], data['files'])
+            state.state_file = state_file
+            return state
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in state file: {e}")
+            return None
         except Exception as e:
-            logger.warning(f"Could not load state file: {e}")
+            logger.error(f"Could not load state file: {e}")
             return None
 
     def update_file(self, filename: str, downloaded: int, status: str) -> None:
@@ -120,16 +159,27 @@ def verify_partial_file(file_path: Path, expected_size: int, expected_checksum: 
 class SpeedTracker:
     """Tracks download speed with rolling window."""
     def __init__(self, window_size: int = 5):
-        self.window_size = window_size  # seconds
+        self.window_size = max(1, window_size)  # Ensure positive window size
         self.bytes_window = deque()
         self.start_time = time.time()
         self.total_bytes = 0
+        self.min_time_threshold = 0.001  # 1ms minimum time threshold
+        self.last_update = self.start_time
 
     def update(self, bytes_downloaded: int):
         """Update with new bytes downloaded."""
+        if bytes_downloaded < 0:
+            logger.warning("Negative bytes count received, ignoring")
+            return
+
         current_time = time.time()
+        # Ensure minimum time between updates
+        if current_time - self.last_update < self.min_time_threshold:
+            current_time = self.last_update + self.min_time_threshold
+            
         self.bytes_window.append((current_time, bytes_downloaded))
         self.total_bytes += bytes_downloaded
+        self.last_update = current_time
         
         # Remove old entries
         while (self.bytes_window and
@@ -137,7 +187,7 @@ class SpeedTracker:
             self.bytes_window.popleft()
 
     def get_speed(self) -> float:
-        """Get current speed in bytes per second."""
+        """Get current speed in bytes per second with improved edge case handling."""
         if not self.bytes_window:
             return 0.0
         
@@ -149,21 +199,26 @@ class SpeedTracker:
                             in self.bytes_window
                             if timestamp > window_start)
         
-        # Calculate time difference
+        # Calculate time difference with minimum threshold
         oldest_time = max(window_start,
                          self.bytes_window[0][0] if self.bytes_window else current_time)
-        time_diff = current_time - oldest_time
+        time_diff = max(self.min_time_threshold, current_time - oldest_time)
         
-        if time_diff <= 0:
-            return 0.0
+        # Apply smoothing for very small time differences
+        if time_diff < self.min_time_threshold * 10:  # Use 10x threshold for smoothing
+            time_diff = self.min_time_threshold * 10
         
         return bytes_in_window / time_diff
 
     def get_average_speed(self) -> float:
-        """Get average speed since start in bytes per second."""
-        time_diff = time.time() - self.start_time
-        if time_diff <= 0:
-            return 0.0
+        """Get average speed since start in bytes per second with minimum threshold."""
+        current_time = time.time()
+        time_diff = max(self.min_time_threshold, current_time - self.start_time)
+        
+        # Apply smoothing for very small time differences
+        if time_diff < self.min_time_threshold * 10:
+            time_diff = self.min_time_threshold * 10
+            
         return self.total_bytes / time_diff
 
     def reset(self):
@@ -210,6 +265,7 @@ class DownloadConfig:
     file_size_threshold: int = 200 * 1024 * 1024  # 200MB threshold for big files
     min_speed_per_thread: int = 3 * 1024 * 1024  # 3MB/s minimum speed per thread
     speed_test_duration: int = 5  # seconds for initial speed test
+    token_refresh_interval: int = 3600  # 1 hour token refresh interval
 
     @classmethod
     def calculate_optimal_threads(cls) -> int:
@@ -242,24 +298,20 @@ class DownloadConfig:
 
     def __post_init__(self):
         """Validate and adjust configuration after initialization."""
-        # First, adjust based on CPU
-        available_threads = multiprocessing.cpu_count()
         optimal_threads = self.calculate_optimal_threads()
         
-        # Log thread configuration
-        logger.info(f"System capabilities:")
-        logger.info(f"- CPU threads: {available_threads}")
-        logger.info(f"- Optimal threads for download: {optimal_threads}")
+        logger.info(f"System configuration:")
+        logger.info(f"- CPU cores: {multiprocessing.cpu_count()}")
+        logger.info(f"- Optimal I/O threads: {optimal_threads}")
+        logger.info("- Note: I/O operations benefit from more threads than CPU cores")
         
-        # Adjust thread count if needed
-        if self.num_threads >= available_threads:
-            logger.warning(
-                f"Requested {self.num_threads} threads exceeds system capacity ({available_threads} threads). "
-                f"Adjusting to {optimal_threads} threads:"
+        if self.num_threads > optimal_threads:
+            logger.info(
+                f"Adjusting thread count from {self.num_threads} to {optimal_threads}:"
+                f"\n- This is optimal for I/O-bound operations"
+                f"\n- More threads than CPU cores is normal for downloads"
+                f"\n- Reserved: 1 thread for interruption handling"
             )
-            logger.info(f"- Reserved: 1 thread for Ctrl+C handling")
-            logger.info(f"- Reserved: 1 thread for system responsiveness")
-            logger.info(f"- Available: {optimal_threads} threads for downloads")
             self.num_threads = optimal_threads
         else:
             logger.info(f"Using requested thread count: {self.num_threads}")
@@ -271,17 +323,35 @@ class FileClassifier:
         self.small_files: List[Tuple[str, int, bool]] = []
         self.big_files: List[Tuple[str, int, bool]] = []
 
-    def classify_files(self, files: List[Tuple[str, int, bool]]) -> None:
+    def _get_fallback_size(self, filename: str, repo_id: str, repo_type: str, token: Optional[str] = None) -> int:
+        """Get file size using HEAD request when API returns None."""
+        try:
+            url = hf_hub_url(repo_id=repo_id, filename=filename, repo_type=repo_type)
+            headers = {"Authorization": f"Bearer {token}"} if token else {}
+            response = requests.head(url, headers=headers, timeout=(10, 30))
+            if response.status_code == 200 and 'Content-Length' in response.headers:
+                return int(response.headers['Content-Length'])
+        except Exception as e:
+            logger.warning(f"Failed to get fallback size for {filename}: {e}")
+        return 0  # Default to small file if size cannot be determined
+
+    def classify_files(self, files: List[Tuple[str, int, bool]], repo_id: str = "",
+                      repo_type: str = "model", token: Optional[str] = None) -> None:
         """Classify files into small and big based on size threshold."""
         self.small_files.clear()
         self.big_files.clear()
         
         for file_info in files:
             filename, size, is_lfs = file_info
+            # Handle null size
+            if size is None or size <= 0:
+                size = self._get_fallback_size(filename, repo_id, repo_type, token)
+                logger.info(f"Using fallback size for {filename}: {size} bytes")
+            
             if size <= self.size_threshold:
-                self.small_files.append(file_info)
+                self.small_files.append((filename, size, is_lfs))
             else:
-                self.big_files.append(file_info)
+                self.big_files.append((filename, size, is_lfs))
         
         logger.info(f"Classified files: {len(self.small_files)} small files, {len(self.big_files)} big files")
 
@@ -405,6 +475,7 @@ class DownloadManager:
         self.completed_files: Set[str] = set()
         self.download_queue = queue.Queue()
         self.file_locks = {}
+        self.dir_locks = {}  # Directory creation locks
         self.token = None  # Initialize without token, will get if needed
         self.speed_trackers: Dict[str, SpeedTracker] = {}
         self.rate_limiters: Dict[str, RateLimiter] = {}
@@ -418,6 +489,25 @@ class DownloadManager:
         
         # Register signal handler
         signal.signal(signal.SIGINT, self._signal_handler)
+
+    def _ensure_directory(self, path: Path) -> bool:
+        """Ensure directory exists with proper locking and parent directory checks."""
+        dir_path = str(path)
+        if dir_path not in self.dir_locks:
+            self.dir_locks[dir_path] = threading.Lock()
+            
+        with self.dir_locks[dir_path]:
+            try:
+                if not path.exists():
+                    # Check and create parent directories first
+                    if not path.parent.exists():
+                        if not self._ensure_directory(path.parent):
+                            return False
+                    path.mkdir(mode=0o755)
+                return True
+            except Exception as e:
+                logger.error(f"Failed to create directory {path}: {e}")
+                return False
 
     def _download_small_files(self, files: List[Tuple[str, int, bool]]) -> bool:
         """Download small files using all available threads."""
@@ -766,6 +856,9 @@ class DownloadManager:
                 logger.info(f"Calculating checksum for {filename}...")
                 checksum = calculate_file_checksum(file_path)
                 
+                # Refresh token if needed
+                self._refresh_token_if_needed()
+                
                 # Get expected checksum from server
                 url = hf_hub_url(repo_id=self.repo_id, filename=filename, repo_type=self.repo_type)
                 headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
@@ -792,18 +885,39 @@ class DownloadManager:
             return False
 
     def _parse_lfs_pointer(self, pointer_content: str) -> Tuple[Optional[str], Optional[int]]:
-        """Parse Git LFS pointer file."""
-        match = re.match(
-            r"version https://git-lfs\.github\.com/spec/v1\noid sha256:([a-f0-9]+)\nsize (\d+)",
-            pointer_content,
-        )
-        if match:
-            return match.group(1), int(match.group(2))
-        return None, None
+        """Parse Git LFS pointer file with improved validation."""
+        try:
+            if not pointer_content or not isinstance(pointer_content, str):
+                logger.error("Invalid LFS pointer content")
+                return None, None
+                
+            match = re.match(
+                r"version https://git-lfs\.github\.com/spec/v1\noid sha256:([a-f0-9]{64})\nsize (\d+)",
+                pointer_content.strip(),
+            )
+            if match:
+                try:
+                    size = int(match.group(2))
+                    if size < 0:
+                        logger.error("Invalid negative size in LFS pointer")
+                        return None, None
+                    return match.group(1), size
+                except ValueError:
+                    logger.error("Invalid size format in LFS pointer")
+                    return None, None
+            else:
+                logger.error("Invalid LFS pointer format")
+                return None, None
+        except Exception as e:
+            logger.error(f"Error parsing LFS pointer: {e}")
+            return None, None
 
     def _download_lfs_file(self, filename: str, local_path: Path) -> bool:
         """Download LFS file with resume capability."""
         try:
+            # Refresh token if needed
+            self._refresh_token_if_needed()
+            
             # Download and parse pointer file
             pointer_url = hf_hub_url(repo_id=self.repo_id, filename=filename, repo_type=self.repo_type)
             headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
@@ -868,6 +982,9 @@ class DownloadManager:
     def _download_regular_file(self, filename: str, local_path: Path) -> bool:
         """Download regular (non-LFS) file with resume capability."""
         try:
+            # Refresh token if needed
+            self._refresh_token_if_needed()
+            
             url = hf_hub_url(repo_id=self.repo_id, filename=filename, repo_type=self.repo_type)
             headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
 
@@ -981,9 +1098,27 @@ class DownloadManager:
             logger.info("- Reserved free: 1")
             return optimal_threads
 
+    def _refresh_token_if_needed(self) -> None:
+        """Refresh token if it's expired."""
+        if not hasattr(self, 'token_last_refresh'):
+            self.token_last_refresh = time.time()
+            return
+
+        current_time = time.time()
+        if (current_time - self.token_last_refresh) >= self.config.token_refresh_interval:
+            logger.info("Refreshing authentication token...")
+            new_token = self._get_auth_token()
+            if new_token != self.token:
+                logger.info("Token updated")
+                self.token = new_token
+            self.token_last_refresh = current_time
+
     def download(self) -> bool:
-        """Main download method with size-based download strategy."""
+        """Main download method with size-based download strategy and token refresh."""
         try:
+            # Initialize token refresh time
+            self.token_last_refresh = time.time()
+            
             # Try to access repository (first without token, then with if needed)
             repo_info = self._try_repo_access()
             if not repo_info:
@@ -991,6 +1126,9 @@ class DownloadManager:
                 
             # Store token if we needed it for access
             self.token = getattr(repo_info, '_token', None)
+            
+            # Refresh token if needed before starting downloads
+            self._refresh_token_if_needed()
 
             # Get optimal thread count based on system capabilities
             optimal_threads = self._get_optimal_threads()
