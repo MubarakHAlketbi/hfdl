@@ -1185,69 +1185,59 @@ class DownloadManager:
             # Check if file exists and verify size
             existing_size = 0
             if local_path.exists():
-                try:
-                    existing_size = local_path.stat().st_size
-                    # Get file size without downloading
-                    head_response = requests.head(url, headers=headers,
-                                               timeout=(self.config.connect_timeout, self.config.read_timeout),
-                                               verify=True)
-                    total_size = int(head_response.headers.get('Content-Length', 0))
-                    
-                    # If file is complete, skip download
-                    if existing_size == total_size:
-                        logger.info(f"File {filename} is already complete")
-                        return True
-                    
-                    # If file exists but is not complete, try resume
-                    if existing_size < total_size:
-                        # Test if server supports range requests
-                        test_headers = headers.copy()
-                        test_headers["Range"] = "bytes=0-0"
-                        try:
-                            test_response = requests.head(url, headers=test_headers,
-                                                      timeout=(self.config.connect_timeout, self.config.read_timeout),
-                                                      verify=True)
-                            
-                            if test_response.status_code == 206:
-                                # Server supports range requests
-                                headers["Range"] = f"bytes={existing_size}-"
-                                logger.info(f"Resuming download of {filename} from byte {existing_size}")
-                            else:
-                                # Server doesn't support range requests, start over
-                                logger.warning(f"Server doesn't support partial downloads for {filename}. Starting fresh download.")
-                                local_path.unlink()
-                                existing_size = 0
-                        except Exception as e:
-                            logger.warning(f"Error testing range support for {filename}: {e}. Starting fresh download.")
-                            local_path.unlink()
-                            existing_size = 0
-                    else:
-                        # File is larger than expected, remove and start over
-                        logger.warning(f"File {filename} is larger than expected. Removing.")
-                        local_path.unlink()
-                        existing_size = 0
-                except Exception as e:
-                    logger.warning(f"Error checking file size for {filename}: {e}. Starting fresh download.")
+                # Verify existing file and get valid size
+                valid, existing_size = verify_partial_file(
+                    local_path,
+                    self.download_state.files[filename]['size'],
+                    self.download_state.files[filename].get('checksum')
+                )
+                if not valid and self.config.fix_broken:
                     local_path.unlink(missing_ok=True)
                     existing_size = 0
 
-            with self._download_with_retry(url, headers=headers,
-                                         timeout=(self.config.connect_timeout, self.config.read_timeout),
-                                         stream=True) as r:
-                
-                total_size = int(r.headers.get('Content-Length', 0)) + existing_size
-                
-                # Check disk space
-                if not self._check_disk_space(total_size // (1024 * 1024) + self.config.min_free_space_mb):
-                    logger.error(f"Insufficient disk space for {filename}")
-                    return False
+            # Get file size from server
+            response = self._download_with_retry(url, headers=headers, 
+                                            timeout=(self.config.connect_timeout, self.config.read_timeout),
+                                            stream=False)
+            total_size = int(response.headers.get('Content-Length', 0))
+            
+            # Check disk space with safety buffer
+            required_mb = (total_size - existing_size) // (1024 * 1024)
+            if not self._check_disk_space(required_mb + self.config.min_free_space_mb):
+                return False
 
-                return self._download_file_with_speed_control(
-                    r, local_path, filename, total_size, existing_size
+            # Set up resume headers if needed
+            if existing_size > 0:
+                headers["Range"] = f"bytes={existing_size}-"
+                
+            # Download file with resume support
+            with self._download_with_retry(url, headers=headers,
+                                        timeout=(self.config.connect_timeout, self.config.read_timeout),
+                                        stream=True) as response:
+                
+                success = self._download_file_with_speed_control(
+                    response, 
+                    local_path,
+                    filename,
+                    total_size,
+                    existing_size
                 )
 
+                if not success:
+                    return False
+
+            # Verify downloaded file integrity
+            if not self._verify_file_integrity(local_path, total_size, filename):
+                logger.error(f"File integrity check failed for {filename}")
+                local_path.unlink(missing_ok=True)
+                return False
+
+            return True
+
         except Exception as e:
-            logger.error(f"Error downloading file {filename}: {e}")
+            logger.error(f"Error downloading regular file {filename}: {e}")
+            if local_path.exists():
+                local_path.unlink(missing_ok=True)
             return False
 
     def _try_repo_access(self, token: Optional[str] = None) -> Optional[Any]:
