@@ -2,6 +2,7 @@ import argparse
 import re
 import sys
 from .downloader import HFDownloader
+from hfdl import __version__
 
 def validate_model_id(value):
     """Validate repository ID format."""
@@ -17,12 +18,17 @@ def validate_model_id(value):
     return repo_id
 
 def main():
-    parser = argparse.ArgumentParser(description='Hugging Face Downloader', 
-                                   formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser = argparse.ArgumentParser(description='Hugging Face Downloader',
+                                    formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     
-    # Required arguments
-    parser.add_argument('model_id', type=validate_model_id,
-                      help='Model/dataset identifier (username/modelname)')
+    # Version argument (must come before positional arguments)
+    parser.add_argument('-v', '--version',
+                       action='version',
+                       version=f'%(prog)s {__version__}')
+    
+    # Model ID argument (now optional)
+    parser.add_argument('model_id', nargs='?', type=validate_model_id,
+                       help='Model/dataset identifier (username/modelname)')
     
     # Directory and threading
     parser.add_argument('-d', '--directory', default='downloads',

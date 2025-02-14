@@ -1324,6 +1324,24 @@ class DownloadManager:
             logger.error(f"Download failed: {str(e)}")
             raise
 
+    def _get_file_list(self) -> List[Tuple[str, int, bool]]:
+        """Retrieve file list from Hugging Face Hub.
+        
+        Returns:
+            List of tuples containing (filename, size, is_lfs)
+        """
+        try:
+            api = HfApi()
+            files = api.list_files_info(
+                self.repo_id,
+                repo_type=self.repo_type,
+                token=self.token
+            )
+            return [(f.rfilename, f.size, f.lfs is not None) for f in files]
+        except Exception as e:
+            logger.error(f"Failed to get file list: {str(e)}")
+            raise HFDownloadError(f"Failed to get file list: {str(e)}") from e
+
     def _initialize(self) -> bool:
         """Initialize the download environment"""
         try:
