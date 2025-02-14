@@ -4,17 +4,11 @@ include README.md
 # Include the license file
 include LICENSE
 
-# Include the requirements file if you have one
-include requirements.txt
-
-# Include any documentation
-recursive-include docs *
-
-# Include the test files
-recursive-include tests *
-
-# Include any configuration files
+# Include the pyproject.toml
 include pyproject.toml
+
+# Include package data
+recursive-include hf_downloader *.py
 
 # Exclude development and temporary files
 global-exclude *.py[cod]
@@ -24,5 +18,3 @@ global-exclude .git*
 global-exclude .DS_Store
 global-exclude *.egg-info
 global-exclude *.egg
-global-exclude downloads
-global-exclude cline_docs
