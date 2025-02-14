@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from collections import deque
 from datetime import datetime
+from . import __version__
 from .config import DownloadConfig
 import sys
 
@@ -66,6 +67,20 @@ class HFDownloader:
         self.exit_event = threading.Event()
 
         signal.signal(signal.SIGINT, self._signal_handler)
+
+    def _get_file_list(self) -> List[Tuple[str, int, bool]]:
+        """Retrieve file list from Hugging Face Hub.
+        
+        Returns:
+            List of tuples containing (filename, size, is_lfs)
+        """
+        try:
+            api = HfApi()
+            files = api.list_files_info(self.model_id, repo_type=self.repo_type, token=self._get_auth_token())
+            return [(f.rfilename, f.size, f.lfs is not None) for f in files]
+        except Exception as e:
+            logger.error(f"Failed to get file list: {str(e)}")
+            raise HFDownloadError(f"Failed to get file list: {str(e)}") from e
 
     def download(self):
         """Main download method with proper error handling"""
@@ -1331,6 +1346,9 @@ def main():
     parser = argparse.ArgumentParser(
         description="Fast and reliable downloader for Hugging Face models and datasets."
     )
+    parser.add_argument('-v', '--version',
+                       action='version',
+                       version=f'%(prog)s {__version__}')
     parser.add_argument("repo_id_or_url", nargs='?', help="Repository ID or URL")
     parser.add_argument("-t", "--threads", type=int, 
                        default=DownloadConfig.calculate_optimal_threads(),
