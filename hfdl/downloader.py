@@ -1317,8 +1317,32 @@ class DownloadManager:
                 logger.error("No files found for download")
                 return False
 
-            self._classify_files(files)
-            return self._download_files()
+            # Classify files using FileClassifier
+            small_files, big_files = self.file_classifier.classify_files(files)
+            
+            # Initialize download state
+            self._initialize_state(files)
+            
+            # Download small files first
+            if small_files:
+                if not self._download_small_files(small_files):
+                    return False
+            
+            # Download big files with optimized threading
+            if big_files:
+                # First do a speed test
+                test_speed = self._test_download_speed(big_files[0])
+                thread_count = ThreadOptimizer(
+                    self.config.min_speed_percentage,
+                    self.config.num_threads
+                ).calculate_optimal_threads(test_speed)
+                
+                if not self._download_big_files(big_files, thread_count):
+                    return False
+
+            logger.info("All files downloaded successfully")
+            return True
+            
         except Exception as e:
             logger.error(f"Download failed: {str(e)}")
             raise
