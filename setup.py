@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="hfdl",
-    version="0.1.9",
+    version="0.1.10",
     author="Mubarak H. Alketbi",
     author_email="mubarak.harran@gmail.com",
     description="Advanced Hugging Face model/downloader with smart resource management",
@@ -15,7 +15,7 @@ setup(
     packages=find_packages(),
     install_requires=[
         "requests>=2.26.0",
-        "huggingface_hub>=0.11.0",
+        "huggingface_hub >=0.19.0",
         "tqdm>=4.62.0",
         "portalocker>=2.3.2",
         "blake3>=0.3.0",
