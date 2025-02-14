@@ -1325,19 +1325,19 @@ class DownloadManager:
             raise
 
     def _get_file_list(self) -> List[Tuple[str, int, bool]]:
-        """Retrieve file list from Hugging Face Hub.
-        
-        Returns:
-            List of tuples containing (filename, size, is_lfs)
-        """
+        """Retrieve file list from Hugging Face Hub."""
         try:
             api = HfApi()
-            files = api.list_files_info(
-                self.repo_id,
+            repo_info = api.repo_info(
+                repo_id=self.model_id,
                 repo_type=self.repo_type,
-                token=self.token
+                token=self._get_auth_token(),
+                files_metadata=True  # Get file metadata including LFS info
             )
-            return [(f.rfilename, f.size, f.lfs is not None) for f in files]
+            return [
+                (file.rfilename, file.size, file.lfs is not None)
+                for file in repo_info.siblings
+            ]
         except Exception as e:
             logger.error(f"Failed to get file list: {str(e)}")
             raise HFDownloadError(f"Failed to get file list: {str(e)}") from e
