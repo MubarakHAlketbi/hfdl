@@ -4,14 +4,14 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
-    name="hf-downloader",
+    name="hfdl",
     version="0.1.0",
     author="Mubarak H. Alketbi",
     author_email="mubarak.harran@gmail.com",
     description="Advanced Hugging Face model/downloader with smart resource management",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/MubarakHAlketbi/hf_downloader",
+    url="https://github.com/MubarakHAlketbi/hfdl",
     packages=find_packages(),
     install_requires=[
         "requests>=2.26.0",
@@ -24,7 +24,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "hf_downloader=hf_downloader.cli:main"
+            "hfdl=hfdl.cli:main"
         ]
     },
     classifiers=[

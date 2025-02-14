@@ -1,4 +1,4 @@
-# Hugging Face Downloader (hf_downloader.py)
+# HFDL - Hugging Face Download Manager
 
 A fast, reliable, and safe downloader for Hugging Face models and datasets. This tool provides better performance than git and huggingface_hub while ensuring safe downloads and intelligent resource management.
 
@@ -59,14 +59,14 @@ A fast, reliable, and safe downloader for Hugging Face models and datasets. This
 You can install the package directly from PyPI:
 
 ```bash
-pip install hf-downloader
+pip install hfdl
 ```
 
 Or install from source:
 
 ```bash
-git clone https://github.com/MubarakHAlketbi/hf_downloader.git
-cd hf_downloader
+git clone https://github.com/MubarakHAlketbi/hfdl.git
+cd hfdl
 pip install -e .
 ```
 
@@ -88,10 +88,10 @@ Requirements:
 1. Command Line Interface:
 ```bash
 # Basic usage
-hf_downloader username/model_name
+hfdl username/model_name
 
 # Advanced options
-hf_downloader username/model_name \
+hfdl username/model_name \
     -t 8 \                          # Number of threads
     -d custom_dir \                 # Custom download directory
     --min-free-space 2000 \        # Minimum free space in MB
@@ -102,7 +102,7 @@ hf_downloader username/model_name \
 
 2. Python API:
 ```python
-from hf_downloader import HFDownloader
+from hfdl import HFDownloader
 
 # Basic usage
 downloader = HFDownloader("username/model_name")
@@ -188,7 +188,6 @@ The tool uses an intelligent thread allocation strategy optimized for different 
    - Network-aware thread management
    - Dynamic performance adjustment
    - Resource monitoring with safety limits
-   - Cross-platform file locking
    - Cross-platform file locking
 
 ## Speed Management
