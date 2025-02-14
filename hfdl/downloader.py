@@ -86,10 +86,10 @@ class HFDownloader:
         """Main download method with proper error handling"""
         try:
             self.download_manager = DownloadManager(
-                self.model_id,
-                self.download_dir,
-                self.repo_type,
-                self.config
+                repo_id=self.model_id,  # Explicitly name the parameter
+                output_dir=self.download_dir,
+                repo_type=self.repo_type,
+                config=self.config
             )
             return self.download_manager.download()
         except Exception as e:
@@ -1318,16 +1318,9 @@ class DownloadManager:
         """Retrieve file list from Hugging Face Hub."""
         try:
             api = HfApi()
-            repo_info = api.repo_info(
-                repo_id=self.model_id,
-                repo_type=self.repo_type,
-                token=self._get_auth_token(),
-                files_metadata=True  # Get file metadata including LFS info
-            )
-            return [
-                (file.rfilename, file.size, file.lfs is not None)
-                for file in repo_info.siblings
-            ]
+            # CORRECTED: Use self.repo_id instead of self.model_id
+            files = api.list_files_info(self.repo_id, repo_type=self.repo_type, token=self._get_auth_token())
+            return [(f.rfilename, f.size, f.lfs is not None) for f in files]
         except Exception as e:
             logger.error(f"Failed to get file list: {str(e)}")
             raise HFDownloadError(f"Failed to get file list: {str(e)}") from e
