@@ -1,11 +1,20 @@
 import argparse
+import re
 import sys
 from .downloader import HFDownloader
 
 def validate_model_id(value):
-    if "/" not in value:
-        raise argparse.ArgumentTypeError("Model ID must be in format username/modelname")
-    return value
+    """Validate repository ID format."""
+    # Remove URL prefix if present
+    repo_id = value.replace("https://huggingface.co/", "").rstrip("/")
+    
+    if not re.match(r'^[\w.-]+/[\w.-]+$', repo_id):
+        raise argparse.ArgumentTypeError(
+            f"Invalid repository ID format: {repo_id}\n"
+            "Expected format: username/repository-name\n"
+            "Allowed characters: letters, numbers, hyphens, underscores, and dots"
+        )
+    return repo_id
 
 def main():
     parser = argparse.ArgumentParser(description='Hugging Face Downloader', 
@@ -67,12 +76,15 @@ def main():
             fix_broken=args.fix_broken,
             force=args.force
         )
-        downloader.download()
+        success = downloader.download()
+        if success:
+            print("\nOperation completed successfully")
+        else:
+            print("\nOperation completed with errors", file=sys.stderr)
+            sys.exit(1)
     except Exception as e:
         print(f"\nERROR: {str(e)}", file=sys.stderr)
         sys.exit(1)
-    finally:
-        print("\nOperation completed")
 
 if __name__ == "__main__":
     main()

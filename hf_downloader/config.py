@@ -24,10 +24,16 @@ class DownloadConfig(BaseConfig):
     def calculate_optimal_threads() -> int:
         """Calculate I/O-optimized thread count based on system capabilities"""
         cpu_cores = multiprocessing.cpu_count()
-        # Use 4x CPU cores, but keep within reasonable bounds
-        # Minimum 8 threads for I/O operations
-        # Maximum 32 threads to prevent resource exhaustion
-        return min(32, max(8, cpu_cores * 4))
+        # More conservative thread allocation
+        # For low-core systems (1-2 cores): use 2-4 threads
+        # For medium systems (3-8 cores): use 2x cores
+        # For high-core systems (>8 cores): use 3x cores up to max 32
+        if cpu_cores <= 2:
+            return max(2, cpu_cores * 2)
+        elif cpu_cores <= 8:
+            return cpu_cores * 2
+        else:
+            return min(32, cpu_cores * 3)
 
     def __str__(self) -> str:
         """Human-readable configuration representation"""

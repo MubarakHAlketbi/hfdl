@@ -10,6 +10,7 @@ class BaseConfig(NetworkConfigMixin, SecurityConfigMixin):
     file_size_threshold: int = Field(default=200 * 1024 * 1024, ge=0)  # 200MB default
     min_speed_percentage: float = Field(default=5.0, ge=1, le=100)
     speed_test_duration: int = Field(default=5, ge=1)
+    speed_check_interval: int = Field(default=5, ge=1)  # Interval for speed checks in seconds
     verify_downloads: bool = False
     fix_broken: bool = False
     force_download: bool = False

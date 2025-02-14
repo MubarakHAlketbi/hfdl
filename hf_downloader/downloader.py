@@ -267,11 +267,6 @@ class DownloadState:
         """Set state file path."""
         self.state_file = path
 
-def calculate_file_checksum(file_path: Path, chunk_size: int = 8192) -> Tuple[Optional[str], str]:
-    """Calculate checksums using hybrid hasher."""
-    hasher = HybridHasher()
-    return hasher.calculate_hash(file_path, chunk_size)
-
 def verify_partial_file(file_path: Path, expected_size: int, expected_checksum: Optional[str] = None) -> Tuple[bool, int]:
     """Verify a partially downloaded file with hybrid hashing."""
     if not file_path.exists():
@@ -285,7 +280,8 @@ def verify_partial_file(file_path: Path, expected_size: int, expected_checksum: 
             return False, 0
             
         if expected_checksum and current_size == expected_size:
-            blake3_hash, sha256_hash = calculate_file_checksum(file_path)
+            hasher = HybridHasher()
+            blake3_hash, sha256_hash = hasher.calculate_hash(file_path)
             # Use SHA256 for compatibility with Hugging Face's API
             if sha256_hash != expected_checksum:
                 logger.warning(f"Checksum mismatch for {file_path}. Removing.")
@@ -578,6 +574,11 @@ class DownloadManager:
         self.token = None
         self.speed_tracker = SpeedTracker()
         self.download_state = None
+        self.total_speed_tracker = SpeedTracker()
+        self.speed_test_manager = SpeedTestManager(
+            duration=config.speed_test_duration,
+            speed_tracker=SpeedTracker()
+        )
 
         # Initialize components
         self.file_classifier = FileClassifier(
