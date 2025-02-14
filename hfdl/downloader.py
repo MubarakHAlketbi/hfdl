@@ -1091,31 +1091,38 @@ class DownloadManager:
             return False
 
     def _parse_lfs_pointer(self, pointer_content: str) -> Tuple[Optional[str], Optional[int]]:
-        """Parse Git LFS pointer file with improved validation."""
+        """Parse Git LFS pointer file with improved validation and error logging."""
         try:
             if not pointer_content or not isinstance(pointer_content, str):
-                logger.error("Invalid LFS pointer content")
+                logger.error("Invalid LFS pointer content: empty or not a string")
                 return None, None
                 
-            match = re.match(
-                r"version https://git-lfs\.github\.com/spec/v1\noid sha256:([a-f0-9]{64})\nsize (\d+)",
-                pointer_content.strip(),
-            )
-            if match:
-                try:
-                    size = int(match.group(2))
-                    if size < 0:
-                        logger.error("Invalid negative size in LFS pointer")
-                        return None, None
-                    return match.group(1), size
-                except ValueError:
-                    logger.error("Invalid size format in LFS pointer")
-                    return None, None
-            else:
-                logger.error("Invalid LFS pointer format")
+            pattern = r"version https://git-lfs\.github\.com/spec/v1\noid sha256:([a-f0-9]{64})\nsize (\d+)"
+            match = re.match(pattern, pointer_content.strip())
+            
+            if not match:
+                logger.error(f"LFS pointer format invalid. Content: {pointer_content[:200]}...")  # Log first 200 chars
                 return None, None
+                
+            try:
+                oid = match.group(1)
+                size = int(match.group(2))
+                
+                if size < 0:
+                    logger.error(f"Invalid negative size in LFS pointer: {size}")
+                    return None, None
+                    
+                logger.debug(f"Successfully parsed LFS pointer: oid={oid[:8]}..., size={size}")
+                return oid, size
+                
+            except ValueError as ve:
+                logger.error(f"Invalid size format in LFS pointer: {match.group(2)}")
+                return None, None
+                
         except Exception as e:
-            logger.error(f"Error parsing LFS pointer: {e}")
+            logger.error(f"Error parsing LFS pointer: {str(e)}")
+            if pointer_content:
+                logger.debug(f"Problematic content: {pointer_content[:200]}...")
             return None, None
 
     def _download_lfs_file(self, filename: str, local_path: Path) -> bool:
