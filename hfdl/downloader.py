@@ -484,16 +484,35 @@ class DownloadManager:
 
     @staticmethod
     def _get_auth_token() -> Optional[str]:
+        """Get and validate Hugging Face authentication token"""
         token = HfFolder.get_token()
-        if token:
-            logger.info("Using authentication token")
-            # Enhanced token masking
-            if len(token) > 8:
-                masked_token = f"{token[:4]}...{token[-4:]}"
-                logger.debug(f"Using token: {masked_token}")
+        if not token:
+            logger.warning("No authentication token found. Some repositories may be inaccessible.")
+            logger.info("To authenticate, run: huggingface-cli login")
+            return None
+
+        # Validate token format
+        if not isinstance(token, str) or len(token) < 8:
+            logger.error("Invalid token format. Please login again using: huggingface-cli login")
+            return None
+
+        try:
+            # Test token validity with HF API
+            api = HfApi()
+            api.whoami(token=token)
+            
+            # Log masked token for debugging
+            masked_token = f"{token[:4]}...{token[-4:]}"
+            logger.info("Successfully authenticated with Hugging Face")
+            logger.debug(f"Using token: {masked_token}")
+            
+            return token
+        except Exception as e:
+            if "401" in str(e):
+                logger.error("Invalid or expired token. Please login again using: huggingface-cli login")
             else:
-                logger.debug("Using token: ********")
-        return token
+                logger.error(f"Error validating token: {e}")
+            return None
 
     def __enter__(self):
         return self

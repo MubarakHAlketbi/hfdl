@@ -2,6 +2,9 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from .config_mixins import NetworkConfigMixin, SecurityConfigMixin
 
+from typing import Literal
+from pathlib import Path
+
 class BaseConfig(NetworkConfigMixin, SecurityConfigMixin):
     """Base validation model for configuration with comprehensive validation rules"""
     num_threads: Optional[int] = Field(default=0, ge=0)
@@ -14,6 +17,8 @@ class BaseConfig(NetworkConfigMixin, SecurityConfigMixin):
     verify_downloads: bool = False
     fix_broken: bool = False
     force_download: bool = False
+    repo_type: Literal["model", "dataset", "space"] = Field(default="model")
+    download_dir: str = Field(default="downloads")
 
     class Config:
         """Pydantic config"""
@@ -23,6 +28,12 @@ class BaseConfig(NetworkConfigMixin, SecurityConfigMixin):
     @classmethod
     def create(cls, **kwargs):
         """Factory method to create config with validation"""
-        if kwargs.get('file_size_threshold', 0) < 1024:
-            kwargs['file_size_threshold'] *= 1024 * 1024
+        # Always convert file size threshold from MB to bytes
+        if 'file_size_threshold' in kwargs:
+            kwargs['file_size_threshold'] = kwargs['file_size_threshold'] * 1024 * 1024  # MB to bytes
+        
+        # Validate download directory
+        if 'download_dir' in kwargs:
+            kwargs['download_dir'] = str(Path(kwargs['download_dir']).resolve())
+            
         return cls(**kwargs)

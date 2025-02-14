@@ -14,9 +14,9 @@ class DownloadConfig(BaseConfig):
         elif kwargs.get('num_threads', 0) <= 0:
             kwargs['num_threads'] = cls.calculate_optimal_threads()
 
-        # Convert file size threshold if needed
-        if kwargs.get('file_size_threshold', 0) < 1024:
-            kwargs['file_size_threshold'] *= 1024 * 1024
+        # Always convert file size threshold from MB to bytes
+        if 'file_size_threshold' in kwargs:
+            kwargs['file_size_threshold'] = kwargs['file_size_threshold'] * 1024 * 1024  # MB to bytes
 
         return cls(**kwargs)
 
