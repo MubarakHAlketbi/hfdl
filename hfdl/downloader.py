@@ -52,11 +52,11 @@ class HFDownloader:
         self.model_id = model_id
         self.download_dir = Path(download_dir)
         self.repo_type = repo_type
-        self.config = DownloadConfig(
-            num_threads=num_threads if isinstance(num_threads, int) else 0,
+        self.config = DownloadConfig.create(
+            num_threads=num_threads,
             chunk_size=chunk_size,
             min_free_space_mb=min_free_space,
-            file_size_threshold=file_size_threshold * 1024 * 1024,
+            file_size_threshold=file_size_threshold,
             min_speed_percentage=min_speed_percentage,
             speed_test_duration=speed_test_duration,
             verify_downloads=verify,
@@ -652,8 +652,11 @@ class DownloadManager:
                 return False
 
     def _download_small_files(self, files: List[Tuple[str, int, bool]]) -> bool:
-        """Download small files using all available threads."""
-        logger.info("Starting download of small files using all available threads...")
+        """Download small files using auto-detected threads"""
+        # Get actual thread count from config
+        actual_threads = max(1, self.config.num_threads)  # Ensure minimum 1 thread
+        
+        logger.info(f"Starting download of {len(files)} small files using {actual_threads} threads...")
         
         # Clear and prepare download queue
         while not self.download_queue.empty():
@@ -668,8 +671,8 @@ class DownloadManager:
             logger.info("No small files to download")
             return True
         
-        # Use all available threads
-        with ThreadPoolExecutor(max_workers=self.config.num_threads) as executor:
+        # Use auto-detected thread count with minimum 1
+        with ThreadPoolExecutor(max_workers=actual_threads) as executor:
             workers = [executor.submit(self._worker) for _ in range(self.config.num_threads)]
             try:
                 self.download_queue.join()
