@@ -1,52 +1,49 @@
-from dataclasses import dataclass
 import multiprocessing
-from typing import Union
-from pydantic import validator, PositiveInt, confloat
-from dataclasses import dataclass
-from .config_mixins import NetworkConfigMixin, SecurityConfigMixin
+from typing import Union, Optional
+from .validation import BaseConfig
 
-@dataclass
-class DownloadConfig:
-    """Centralized configuration for download parameters with validation"""
-    num_threads: int = 0
-    chunk_size: PositiveInt = 1024 * 1024  # 1MB chunks
-    min_free_space_mb: PositiveInt = 5000  # 5GB minimum free space
-    file_size_threshold: PositiveInt = 200 * 1024 * 1024  # 200MB threshold
-    min_speed_percentage: confloat(ge=1, le=100) = 5.0  # 1-100% range
-    speed_test_duration: PositiveInt = 5  # seconds
-    verify_downloads: bool = False
-    fix_broken: bool = False
-    force_download: bool = False
-    max_retries: PositiveInt = 5
-    connect_timeout: PositiveInt = 10  # seconds
-    read_timeout: PositiveInt = 30  # seconds
-    token_refresh_interval: PositiveInt = 3600  # 1 hour
+class DownloadConfig(BaseConfig):
+    """Configuration for download operations with validation and smart defaults"""
+    
+    @classmethod
+    def create(cls, **kwargs) -> 'DownloadConfig':
+        """Factory method to create config with proper validation"""
+        # Handle 'auto' threads specification
+        if isinstance(kwargs.get('num_threads'), str) and kwargs['num_threads'].lower() == 'auto':
+            kwargs['num_threads'] = cls.calculate_optimal_threads()
+        elif kwargs.get('num_threads', 0) <= 0:
+            kwargs['num_threads'] = cls.calculate_optimal_threads()
 
+        # Convert file size threshold if needed
+        if kwargs.get('file_size_threshold', 0) < 1024:
+            kwargs['file_size_threshold'] *= 1024 * 1024
 
-    def __post_init__(self):
-        """Post-initialization validation and setup"""
-        self._validate_threads()
-        self._convert_size_threshold()
-
-    def _validate_threads(self):
-        """Calculate optimal threads if auto-detected"""
-        if isinstance(self.num_threads, str) and self.num_threads.lower() == 'auto':
-            self.num_threads = self.calculate_optimal_threads()
-        elif self.num_threads <= 0:
-            self.num_threads = self.calculate_optimal_threads()
-
-    def _convert_size_threshold(self):
-        """Convert size threshold to bytes if needed"""
-        if self.file_size_threshold < 1024:
-            self.file_size_threshold *= 1024 * 1024
+        return cls(**kwargs)
 
     @staticmethod
     def calculate_optimal_threads() -> int:
-        """Calculate I/O-optimized thread count"""
+        """Calculate I/O-optimized thread count based on system capabilities"""
         cpu_cores = multiprocessing.cpu_count()
+        # Use 4x CPU cores, but keep within reasonable bounds
+        # Minimum 8 threads for I/O operations
+        # Maximum 32 threads to prevent resource exhaustion
         return min(32, max(8, cpu_cores * 4))
 
-    @validator('min_speed_percentage')
-    def validate_speed_percentage(cls, value):
-        """Ensure speed percentage stays in valid range"""
-        return max(1.0, min(100.0, value))
+    def __str__(self) -> str:
+        """Human-readable configuration representation"""
+        return (
+            f"DownloadConfig:\n"
+            f"  Threads: {self.num_threads}\n"
+            f"  Chunk size: {self.chunk_size / (1024*1024):.1f}MB\n"
+            f"  Min free space: {self.min_free_space_mb}MB\n"
+            f"  File size threshold: {self.file_size_threshold / (1024*1024):.1f}MB\n"
+            f"  Min speed percentage: {self.min_speed_percentage}%\n"
+            f"  Speed test duration: {self.speed_test_duration}s\n"
+            f"  Verify downloads: {self.verify_downloads}\n"
+            f"  Fix broken: {self.fix_broken}\n"
+            f"  Force download: {self.force_download}\n"
+            f"  Connect timeout: {self.connect_timeout}s\n"
+            f"  Read timeout: {self.read_timeout}s\n"
+            f"  Max retries: {self.max_retries}\n"
+            f"  Token refresh interval: {self.token_refresh_interval}s"
+        )

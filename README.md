@@ -43,7 +43,7 @@ A fast, reliable, and safe downloader for Hugging Face models and datasets. This
 
 ## Requirements
 
-- Python 3.7 or higher
+- Python 3.10 or higher
 - Required packages:
   * requests
   * huggingface_hub

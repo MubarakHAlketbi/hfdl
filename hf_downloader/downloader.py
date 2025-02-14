@@ -1,3 +1,4 @@
+import argparse
 import time
 import requests
 import os
@@ -12,6 +13,7 @@ import multiprocessing
 import random
 import portalocker
 import blake3
+from functools import wraps
 from concurrent.futures import ThreadPoolExecutor
 from huggingface_hub import HfApi, hf_hub_url, HfFolder
 import signal
@@ -314,20 +316,35 @@ def handle_errors(fn):
     return wrapper
 
 class SpeedTracker:
+    """Tracks download speed using a rolling window."""
     def __init__(self, window_size: int = 5):
         self.window_size = window_size
         self.bytes_window = deque()
         self.start_time = time.time()
+        self.total_bytes = 0
 
     def update(self, bytes_downloaded: int):
-        self.bytes_window.append((time.time(), bytes_downloaded))
-        while self.bytes_window and self.bytes_window[0][0] < time.time() - self.window_size:
-            self.bytes_window.popleft()
+        """Update speed tracking with new bytes."""
+        current_time = time.time()
+        self.bytes_window.append((current_time, bytes_downloaded))
+        self.total_bytes += bytes_downloaded
+        
+        # Remove old entries outside the window
+        while self.bytes_window and self.bytes_window[0][0] < current_time - self.window_size:
+            _, old_bytes = self.bytes_window.popleft()
+            self.total_bytes -= old_bytes
 
     def get_speed(self) -> float:
+        """Get current speed in bytes per second."""
         if not self.bytes_window:
             return 0.0
-        return sum(b for t, b in self.bytes_window) / self.window_size
+        return self.total_bytes / min(time.time() - self.start_time, self.window_size)
+
+    def reset(self):
+        """Reset speed tracking."""
+        self.bytes_window.clear()
+        self.total_bytes = 0
+        self.start_time = time.time()
 
 class RateLimiter:
     """Limits download rate per thread."""
@@ -384,8 +401,13 @@ class DownloadConfig:
     def calculate_optimal_threads() -> int:
         cpu_cores = multiprocessing.cpu_count()
         return min(32, max(8, cpu_cores * 4))
-
 class FileClassifier:
+    """Classifies files based on size for optimized downloading."""
+    def __init__(self, file_size_threshold: int, repo_id: str, repo_type: str):
+        self.file_size_threshold = file_size_threshold
+        self.repo_id = repo_id
+        self.repo_type = repo_type
+
     def _get_fallback_size(self, filename: str) -> int:
         """Fallback size retrieval when API doesn't provide it"""
         try:
@@ -394,17 +416,28 @@ class FileClassifier:
             return int(response.headers.get('Content-Length', 0))
         except Exception as e:
             logger.warning(f"Couldn't get size for {filename}: {e}")
-            return 0  # Treat as small file
+            return 0
 
-    def classify_files(self, files: List[Tuple[str, int, bool]]):
+    def classify_files(self, files: List[Tuple[str, int, bool]]) -> Tuple[List[Tuple[str, int, bool]], List[Tuple[str, int, bool]]]:
+        """Classify files into small and big based on size threshold."""
+        small_files = []
+        big_files = []
+        
         for file_info in files:
             filename, size, is_lfs = file_info
             if size is None:
-                size = self._get_fallback_size(filename)  # Add fallback
-
+                size = self._get_fallback_size(filename)
+            
+            if size < self.file_size_threshold:
+                small_files.append((filename, size, is_lfs))
+            else:
+                big_files.append((filename, size, is_lfs))
+        
+        return small_files, big_files
 class SpeedTestManager:
     """Manages speed testing for downloads."""
     def __init__(self, duration: int, speed_tracker: SpeedTracker):
+        """Initialize speed test manager."""
         self.duration = duration
         self.speed_tracker = speed_tracker
         self.start_time = 0
@@ -414,7 +447,8 @@ class SpeedTestManager:
         """Start speed test."""
         self.start_time = time.time()
         self.test_complete = False
-        self.speed_tracker.reset()
+        if hasattr(self.speed_tracker, 'reset'):
+            self.speed_tracker.reset()
 
     def update(self, bytes_downloaded: int) -> bool:
         """Update speed test with new bytes. Returns True if test is complete."""
@@ -423,7 +457,7 @@ class SpeedTestManager:
 
         self.speed_tracker.update(bytes_downloaded)
         elapsed = time.time() - self.start_time
-        
+
         if elapsed >= self.duration:
             self.test_complete = True
             return True
@@ -492,8 +526,12 @@ class DownloadManager:
         token = HfFolder.get_token()
         if token:
             logger.info("Using authentication token")
-            # Mask token in logs
-            logger.debug(f"Using token starting with: {token[:4]}...") 
+            # Enhanced token masking
+            if len(token) > 8:
+                masked_token = f"{token[:4]}...{token[-4:]}"
+                logger.debug(f"Using token: {masked_token}")
+            else:
+                logger.debug("Using token: ********")
         return token
 
     def __enter__(self):
@@ -504,9 +542,33 @@ class DownloadManager:
         
     def cleanup_resources(self):
         """Proper cleanup of network connections and file locks"""
-        self.exit_event.set()
-        if hasattr(self, 'executor'):
-            self.executor.shutdown(wait=False)
+        try:
+            # Signal all threads to stop
+            self.exit_event.set()
+            
+            # Wait briefly for threads to notice the exit signal
+            cleanup_timeout = 5  # seconds
+            cleanup_start = time.time()
+            
+            # Check if downloads have stopped
+            while time.time() - cleanup_start < cleanup_timeout:
+                if not any(t.get_speed() > 0 for t in getattr(self, 'speed_trackers', {}).values()):
+                    break
+                time.sleep(0.1)
+            
+            # Force shutdown executor
+            if hasattr(self, 'executor'):
+                self.executor.shutdown(wait=False, cancel_futures=True)
+            
+            # Clean up any remaining locks
+            for lock in getattr(self, 'file_locks', {}).values():
+                try:
+                    if hasattr(lock, 'release'):
+                        lock.release()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
 
     def _signal_handler(self, sig, frame):
         """Handle interrupt signal."""
@@ -553,7 +615,11 @@ class DownloadManager:
         self.download_state = None
 
         # Initialize components
-        self.file_classifier = FileClassifier(self.config.file_size_threshold)
+        self.file_classifier = FileClassifier(
+            file_size_threshold=self.config.file_size_threshold,
+            repo_id=self.repo_id,
+            repo_type=self.repo_type
+        )
         self.circuit_breaker = CircuitBreaker()
         signal.signal(signal.SIGINT, self._signal_handler)
 
@@ -960,6 +1026,11 @@ class DownloadManager:
                 logger.info(f"Calculating checksums for {filename}...")
                 blake3_hash, sha256_hash = self.hasher.calculate_hash(file_path)
                 
+                # Store SHA256 checksum in state
+                if sha256_hash and filename in self.download_state.files:
+                    self.download_state.files[filename]['checksum'] = sha256_hash
+                    self.download_state.save()
+                
                 # Log if BLAKE3 was used (for large files)
                 if blake3_hash:
                     logger.info(f"Used BLAKE3 for fast hashing of large file {filename}")
@@ -981,12 +1052,26 @@ class DownloadManager:
                         # Always use SHA256 for API compatibility
                         if sha256_hash != expected_checksum:
                             logger.error(f"Checksum mismatch for {filename}")
+                            if filename in self.download_state.files:
+                                self.download_state.files[filename]['status'] = 'checksum_failed'
+                                self.download_state.save()
                             return False
                         logger.info(f"Checksum verified for {filename}")
+                        # Update state with verified checksum
+                        if filename in self.download_state.files:
+                            self.download_state.files[filename]['checksum'] = expected_checksum
+                            self.download_state.files[filename]['status'] = 'verified'
+                            self.download_state.save()
                     else:
                         logger.warning(f"No checksum available from server for {filename}, using size verification only")
+                        if filename in self.download_state.files:
+                            self.download_state.files[filename]['status'] = 'size_verified'
+                            self.download_state.save()
                 except Exception as e:
                     logger.warning(f"Could not verify checksum for {filename}: {e}")
+                    if filename in self.download_state.files:
+                        self.download_state.files[filename]['status'] = 'verification_failed'
+                        self.download_state.save()
             
             return True
         except Exception as e:
