@@ -1,0 +1,19 @@
+# Core dependencies
+huggingface_hub>=0.28.1
+tqdm>=4.67.1
+pydantic>=2.10.6
+requests>=2.32.3
+
+# Test dependencies
+pytest>=8.3.4
+pytest-mock>=3.14.0
+
+# Type checking
+types-requests>=2.32.0
+types-tqdm>=4.67.0
+
+# Development tools
+black>=25.1.0  # Code formatting
+isort>=6.0.0  # Import sorting
+mypy>=1.15.0    # Type checking
+flake8>=7.1.1  # Code linting

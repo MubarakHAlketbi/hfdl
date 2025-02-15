@@ -1,4 +1,4 @@
-# HFDL - Hugging Face Download Library
+# HFDL - Hugging Face Download Library (v. 0.3.0)
 
 A fast and reliable downloader for Hugging Face models and datasets with enhanced features.
 
