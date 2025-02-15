@@ -1,19 +1,26 @@
 from setuptools import setup, find_packages
 
-# Read requirements
-with open('requirements.txt') as f:
-    requirements = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+# Define requirements directly
+core_requirements = [
+    "huggingface_hub>=0.28.1",
+    "tqdm>=4.67.1",
+    "pydantic>=2.10.6",
+    "requests>=2.32.3"
+]
 
-# Split requirements into core and test
-core_requirements = [req for req in requirements if not any(
-    x in req for x in ['pytest', 'black', 'isort', 'mypy', 'flake8', 'types-']
-)]
-test_requirements = [req for req in requirements if any(
-    x in req for x in ['pytest', 'types-']
-)]
-dev_requirements = [req for req in requirements if any(
-    x in req for x in ['black', 'isort', 'mypy', 'flake8']
-)]
+test_requirements = [
+    "pytest>=8.3.4",
+    "pytest-mock>=3.14.0",
+    "types-requests>=2.32.0",
+    "types-tqdm>=4.67.0"
+]
+
+dev_requirements = [
+    "black>=25.1.0",
+    "isort>=6.0.0",
+    "mypy>=1.15.0",
+    "flake8>=7.1.1"
+]
 
 setup(
     name="hfdl",
@@ -21,9 +28,9 @@ setup(
     description="Fast and reliable downloader for Hugging Face models and datasets",
     long_description=open('README.md').read(),
     long_description_content_type='text/markdown',
-    author="Your Name",
-    author_email="your.email@example.com",
-    url="https://github.com/yourusername/hfdl",
+    author="Mubarak H. Alketbi",
+    author_email="mubarak.harran@gmail.com",
+    url="https://github.com/MubarakHAlketbi/hfdl",
     packages=find_packages(),
     entry_points={
         'console_scripts': [
@@ -50,8 +57,8 @@ setup(
     ],
     keywords='huggingface download models datasets machine-learning',
     project_urls={
-        'Bug Reports': 'https://github.com/yourusername/hfdl/issues',
-        'Source': 'https://github.com/yourusername/hfdl',
+        'Bug Reports': 'https://github.com/MubarakHAlketbi/hfdl/issues',
+        'Source': 'https://github.com/MubarakHAlketbi/hfdl',
     },
     include_package_data=True,
     zip_safe=False,
