@@ -3,6 +3,7 @@ import logging
 import argparse
 from pathlib import Path
 from typing import Optional, List, Union, Tuple
+from requests.exceptions import HTTPError
 from huggingface_hub import (
     HfApi, 
     snapshot_download,
@@ -12,7 +13,8 @@ from huggingface_hub import (
 from huggingface_hub.utils import (
     RepositoryNotFoundError,
     RevisionNotFoundError,
-    LocalEntryNotFoundError
+    LocalEntryNotFoundError,
+    EntryNotFoundError
 )
 from tqdm import tqdm
 from .config import DownloadConfig
@@ -43,61 +45,58 @@ class HFDownloader:
         speed_measure_seconds: int = 8,
         enhanced_mode: bool = False
     ):
-        """Initialize the downloader with configuration.
-        
-        Args:
-            model_id (str): The model ID to download (e.g. "bert-base-uncased")
-            download_dir (str): Directory to store downloads
-            num_threads (Union[int, str]): Number of download threads or 'auto'
-            repo_type (str): Repository type ("model", "dataset", or "space")
-            verify (bool): Whether to verify downloads
-            force (bool): Force fresh download
-            resume (bool): Allow resuming partial downloads
-            size_threshold_mb (float): Threshold in MB to categorize files
-            bandwidth_percentage (float): Percentage of bandwidth to use
-            speed_measure_seconds (int): Duration for speed measurement
-            enhanced_mode (bool): Whether to use enhanced download features
-        """
-        self.model_id = self._normalize_repo_id(model_id)
-        self.download_dir = Path(download_dir)
-        self.repo_type = repo_type
-        self.enhanced_mode = enhanced_mode
-        
-        # Convert 'auto' to 0 for thread count
-        thread_count = 0 if isinstance(num_threads, str) and num_threads.lower() == 'auto' else num_threads
-        
-        # Initialize configuration
-        self.config = DownloadConfig.create(
-            num_threads=thread_count,
-            verify_downloads=verify,
-            force_download=force,
-            size_threshold_mb=size_threshold_mb,
-            bandwidth_percentage=bandwidth_percentage,
-            speed_measure_seconds=speed_measure_seconds
-        )
-        self.resume = resume
-        
-        # Initialize HfApi instance once
-        self.api = HfApi()
-        self.token = self._get_auth_token()
-        
-        # Initialize managers for enhanced mode
-        if enhanced_mode:
-            self.thread_manager = ThreadManager()
-            self.file_manager = FileManager(
-                api=self.api,
-                size_threshold_mb=self.config.size_threshold_mb
+        """Initialize the downloader with configuration."""
+        try:
+            self.model_id = self._normalize_repo_id(model_id)
+            self.download_dir = Path(download_dir)
+            self.repo_type = repo_type
+            self.enhanced_mode = enhanced_mode
+            
+            # Convert 'auto' to 0 for thread count
+            thread_count = 0 if isinstance(num_threads, str) and num_threads.lower() == 'auto' else num_threads
+            
+            # Initialize configuration
+            self.config = DownloadConfig.create(
+                num_threads=thread_count,
+                verify_downloads=verify,
+                force_download=force,
+                size_threshold_mb=size_threshold_mb,
+                bandwidth_percentage=bandwidth_percentage,
+                speed_measure_seconds=speed_measure_seconds
             )
-            self.speed_manager = SpeedManager(
-                api=self.api,
-                measure_duration=self.config.speed_measure_seconds,
-                bandwidth_percentage=self.config.bandwidth_percentage,
-                chunk_size=self.config.download_chunk_size
-            )
-        else:
-            self.thread_manager = None
-            self.file_manager = None
-            self.speed_manager = None
+            self.resume = resume
+            
+            # Initialize HfApi instance once
+            self.api = HfApi()
+            self.token = self._get_auth_token()
+            
+            # Initialize managers for enhanced mode
+            if enhanced_mode:
+                self.thread_manager = ThreadManager()
+                self.file_manager = FileManager(
+                    api=self.api,
+                    size_threshold_mb=self.config.size_threshold_mb
+                )
+                self.speed_manager = SpeedManager(
+                    api=self.api,
+                    measure_duration=self.config.speed_measure_seconds,
+                    bandwidth_percentage=self.config.bandwidth_percentage,
+                    chunk_size=self.config.download_chunk_size
+                )
+            else:
+                self.thread_manager = None
+                self.file_manager = None
+                self.speed_manager = None
+                
+        except OSError as e:
+            logger.error(f"File system error during initialization: {e}")
+            raise HFDownloadError(f"File system error: {e}") from e
+        except EnvironmentError as e:
+            logger.error(f"Environment error during initialization: {e}")
+            raise HFDownloadError(f"System environment error: {e}") from e
+        except Exception as e:
+            logger.error(f"Unexpected error during initialization: {e}")
+            raise HFDownloadError(str(e)) from e
 
     @staticmethod
     def _normalize_repo_id(repo_id_or_url: str) -> str:
@@ -131,11 +130,14 @@ class HFDownloader:
             # Validate token by making an API call
             self.api.whoami(token=token)
             return token
-        except Exception as e:
+        except HTTPError as e:
             if "401" in str(e):
                 logger.warning("Invalid or expired token. Please login again using: huggingface-cli login")
             else:
-                logger.error(f"Error validating token: {e}")
+                logger.error(f"Network error validating token: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error validating token: {e}")
             return None
 
     def _verify_repo_access(self) -> bool:
@@ -150,6 +152,9 @@ class HFDownloader:
         except RepositoryNotFoundError:
             logger.error(f"Repository not found: {self.model_id}")
             return False
+        except HTTPError as e:
+            logger.error(f"Network error accessing repository: {e}")
+            return False
         except Exception as e:
             logger.error(f"Error accessing repository: {e}")
             return False
@@ -157,12 +162,29 @@ class HFDownloader:
     def _download_enhanced(self) -> bool:
         """Download using enhanced features with size-based optimization"""
         try:
+            # Verify download directory
+            try:
+                self.download_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                logger.error(f"Cannot create download directory: {e}")
+                raise HFDownloadError(f"File system error: Cannot create download directory - {e}")
+            except EnvironmentError as e:
+                logger.error(f"System error creating directory: {e}")
+                raise HFDownloadError(f"System error: Cannot create directory - {e}")
+            
             # Discover and categorize files
-            small_files, big_files = self.file_manager.discover_files(
-                repo_id=self.model_id,
-                repo_type=self.repo_type,
-                token=self.token
-            )
+            try:
+                small_files, big_files = self.file_manager.discover_files(
+                    repo_id=self.model_id,
+                    repo_type=self.repo_type,
+                    token=self.token
+                )
+            except EntryNotFoundError as e:
+                logger.error(f"Repository content not found: {e}")
+                return False
+            except HTTPError as e:
+                logger.error(f"Network error discovering files: {e}")
+                return False
             
             # Create output directory
             output_dir = self.download_dir / self.model_id.split('/')[-1]
@@ -195,6 +217,15 @@ class HFDownloader:
                                 file.path_in_repo,
                                 file.size
                             )
+                        except EntryNotFoundError as e:
+                            logger.error(f"File not found in repository: {file.name} - {e}")
+                            continue
+                        except HTTPError as e:
+                            logger.error(f"Network error downloading {file.name}: {e}")
+                            continue
+                        except OSError as e:
+                            logger.error(f"File system error saving {file.name}: {e}")
+                            continue
                         except Exception as e:
                             logger.error(f"Error downloading {file.name}: {e}")
                             continue
@@ -210,9 +241,11 @@ class HFDownloader:
                             sample_file=big_files[0].path_in_repo,
                             token=self.token
                         )
+                    except HTTPError as e:
+                        logger.error(f"Network error measuring speed: {e}")
+                        return self._download_legacy()
                     except Exception as e:
                         logger.error(f"Speed measurement failed: {e}")
-                        # Fall back to default download if speed measurement fails
                         return self._download_legacy()
                     
                     # Download big files with speed control
@@ -249,23 +282,41 @@ class HFDownloader:
                                 force_download=self.config.force_download,
                                 resume_download=self.resume
                             )
+                        except EntryNotFoundError as e:
+                            logger.error(f"File not found in repository: {file.name} - {e}")
+                            continue
+                        except HTTPError as e:
+                            logger.error(f"Network error downloading {file.name}: {e}")
+                            continue
+                        except OSError as e:
+                            logger.error(f"File system error saving {file.name}: {e}")
+                            continue
                         except Exception as e:
                             logger.error(f"Error downloading {file.name}: {e}")
                             continue
             
             return True
             
+        except EnvironmentError as e:
+            logger.error(f"System environment error: {e}")
+            return self._download_legacy()
         except Exception as e:
             logger.error(f"Enhanced download failed: {e}")
-            # Fall back to legacy download
             return self._download_legacy()
 
     def _download_legacy(self) -> bool:
         """Original download method using snapshot_download"""
         try:
             # Create output directory
-            output_dir = self.download_dir / self.model_id.split('/')[-1]
-            output_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                output_dir = self.download_dir / self.model_id.split('/')[-1]
+                output_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                logger.error(f"Cannot create output directory: {e}")
+                raise HFDownloadError(f"File system error: Cannot create directory - {e}")
+            except EnvironmentError as e:
+                logger.error(f"System error creating directory: {e}")
+                raise HFDownloadError(f"System error: Cannot create directory - {e}")
 
             logger.info(f"Downloading {self.model_id} to {output_dir}")
 
@@ -288,6 +339,15 @@ class HFDownloader:
             except (RepositoryNotFoundError, RevisionNotFoundError, LocalEntryNotFoundError) as e:
                 logger.error(f"Download failed: {str(e)}")
                 return False
+            except EntryNotFoundError as e:
+                logger.error(f"Repository content not found: {e}")
+                return False
+            except HTTPError as e:
+                logger.error(f"Network error during download: {e}")
+                return False
+            except OSError as e:
+                logger.error(f"File system error during download: {e}")
+                return False
             except Exception as e:
                 logger.error(f"Unexpected error during download: {str(e)}")
                 return False
@@ -297,11 +357,7 @@ class HFDownloader:
             raise HFDownloadError(str(e)) from e
 
     def download(self) -> bool:
-        """Download the model using appropriate method based on configuration.
-        
-        Returns:
-            bool: True if download was successful, False otherwise
-        """
+        """Download the model using appropriate method based on configuration."""
         if not self._verify_repo_access():
             return False
             

@@ -20,6 +20,40 @@ def temp_dir():
     shutil.rmtree(temp_path)
 
 @pytest.fixture
+def real_model_repo():
+    """Real model repository for testing"""
+    return {
+        'id': "MaziyarPanahi/Qwen2.5-7B-Instruct-GGUF",
+        'url': "https://huggingface.co/MaziyarPanahi/Qwen2.5-7B-Instruct-GGUF",
+        'type': "model"
+    }
+
+@pytest.fixture
+def real_dataset_repo():
+    """Real dataset repository for testing"""
+    return {
+        'id': "Anthropic/hh-rlhf",
+        'url': "https://huggingface.co/datasets/Anthropic/hh-rlhf",
+        'type': "dataset"
+    }
+
+@pytest.fixture
+def fake_repos():
+    """Fake repositories for testing error cases"""
+    return {
+        'model': {
+            'id': "fake-user/nonexistent-model",
+            'url': "https://huggingface.co/fake-user/nonexistent-model",
+            'type': "model"
+        },
+        'dataset': {
+            'id': "fake-user/nonexistent-dataset",
+            'url': "https://huggingface.co/datasets/fake-user/nonexistent-dataset",
+            'type': "dataset"
+        }
+    }
+
+@pytest.fixture
 def sample_repo_files():
     """Sample repository file list for testing"""
     return [

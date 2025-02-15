@@ -5,9 +5,26 @@ from typing import List, Dict, Tuple, Optional
 from pathlib import Path
 import logging
 from huggingface_hub import HfApi
-from huggingface_hub.utils import RepositoryNotFoundError
+from huggingface_hub.utils import (
+    RepositoryNotFoundError,
+    EntryNotFoundError,
+    RevisionNotFoundError
+)
+from requests.exceptions import HTTPError
 
 logger = logging.getLogger(__name__)
+
+class FileManagerError(Exception):
+    """Base exception for file manager errors"""
+    pass
+
+class FileSizeError(FileManagerError):
+    """Error when getting file size information"""
+    pass
+
+class FileTrackingError(FileManagerError):
+    """Error when tracking file progress"""
+    pass
 
 @dataclass
 class FileInfo:
@@ -20,20 +37,19 @@ class FileInfo:
     completed: bool = False
 
 class FileManager:
-    """Manages file operations and tracking for downloads
-    
-    Handles:
-    - File discovery and size checking
-    - Small/big file categorization
-    - Download progress tracking
-    - Thread-safe operations
-    """
+    """Manages file operations and tracking for downloads"""
     
     def __init__(self, api: HfApi, size_threshold_mb: float):
-        self.api = api
-        self.size_threshold_bytes = size_threshold_mb * 1024 * 1024
-        self._files: Dict[str, FileInfo] = {}
-        self._lock = threading.Lock()
+        try:
+            self.api = api
+            if size_threshold_mb <= 0:
+                raise ValueError("Size threshold must be positive")
+            self.size_threshold_bytes = size_threshold_mb * 1024 * 1024
+            self._files: Dict[str, FileInfo] = {}
+            self._lock = threading.Lock()
+        except Exception as e:
+            logger.error(f"Failed to initialize file manager: {e}")
+            raise FileManagerError(f"File manager initialization failed: {e}")
         
     def discover_files(
         self,
@@ -53,15 +69,28 @@ class FileManager:
             
         Raises:
             RepositoryNotFoundError: If repository not found
-            ValueError: If invalid repository type
+            RevisionNotFoundError: If revision not found
+            HTTPError: If network error occurs
+            FileSizeError: If error getting file sizes
+            FileManagerError: For other errors
         """
         try:
             # Get list of files from repository
-            files = self.api.list_repo_files(
-                repo_id=repo_id,
-                repo_type=repo_type,
-                token=token
-            )
+            try:
+                files = self.api.list_repo_files(
+                    repo_id=repo_id,
+                    repo_type=repo_type,
+                    token=token
+                )
+            except (RepositoryNotFoundError, RevisionNotFoundError) as e:
+                logger.error(f"Repository error: {e}")
+                raise
+            except HTTPError as e:
+                logger.error(f"Network error listing files: {e}")
+                raise
+            except Exception as e:
+                logger.error(f"Error listing repository files: {e}")
+                raise FileManagerError(f"Failed to list repository files: {e}")
             
             small_files: List[FileInfo] = []
             big_files: List[FileInfo] = []
@@ -69,22 +98,35 @@ class FileManager:
             # Get file sizes and categorize
             for file_path in files:
                 try:
-                    size = self.api.get_repo_file_metadata(
-                        repo_id=repo_id,
-                        repo_type=repo_type,
-                        path=file_path,
-                        token=token
-                    ).size
+                    # Get file metadata
+                    try:
+                        metadata = self.api.get_repo_file_metadata(
+                            repo_id=repo_id,
+                            repo_type=repo_type,
+                            path=file_path,
+                            token=token
+                        )
+                    except EntryNotFoundError:
+                        logger.warning(f"File not found: {file_path}")
+                        continue
+                    except HTTPError as e:
+                        logger.error(f"Network error getting metadata for {file_path}: {e}")
+                        raise
                     
-                    file_info = FileInfo(
-                        name=Path(file_path).name,
-                        size=size,
-                        path_in_repo=file_path,
-                        local_path=Path(file_path)
-                    )
+                    # Create file info
+                    try:
+                        file_info = FileInfo(
+                            name=Path(file_path).name,
+                            size=metadata.size,
+                            path_in_repo=file_path,
+                            local_path=Path(file_path)
+                        )
+                    except Exception as e:
+                        logger.error(f"Error creating FileInfo for {file_path}: {e}")
+                        raise FileSizeError(f"Failed to process file info: {e}")
                     
                     # Categorize based on size
-                    if size <= self.size_threshold_bytes:
+                    if metadata.size <= self.size_threshold_bytes:
                         small_files.append(file_info)
                     else:
                         big_files.append(file_info)
@@ -92,13 +134,19 @@ class FileManager:
                     with self._lock:
                         self._files[file_path] = file_info
                         
+                except (HTTPError, FileSizeError) as e:
+                    raise
                 except Exception as e:
-                    logger.warning(f"Failed to get metadata for {file_path}: {e}")
-                    continue
+                    logger.error(f"Unexpected error processing {file_path}: {e}")
+                    raise FileManagerError(f"Failed to process file: {e}")
                     
             # Sort files by size (ascending for small, descending for big)
-            small_files.sort(key=lambda x: x.size)
-            big_files.sort(key=lambda x: x.size, reverse=True)
+            try:
+                small_files.sort(key=lambda x: x.size)
+                big_files.sort(key=lambda x: x.size, reverse=True)
+            except Exception as e:
+                logger.error(f"Error sorting files: {e}")
+                raise FileManagerError(f"Failed to sort files: {e}")
             
             logger.info(
                 f"Discovered {len(small_files)} small files and "
@@ -106,12 +154,11 @@ class FileManager:
             )
             return small_files, big_files
             
-        except RepositoryNotFoundError:
-            logger.error(f"Repository not found: {repo_id}")
+        except (RepositoryNotFoundError, RevisionNotFoundError, HTTPError, FileSizeError):
             raise
         except Exception as e:
             logger.error(f"Error discovering files: {e}")
-            raise ValueError(f"Failed to discover files: {e}")
+            raise FileManagerError(f"Failed to discover files: {e}")
             
     def update_progress(self, file_path: str, bytes_downloaded: int):
         """Update download progress for a file
@@ -119,12 +166,24 @@ class FileManager:
         Args:
             file_path: Path of file in repository
             bytes_downloaded: Number of bytes downloaded
+            
+        Raises:
+            FileTrackingError: If error updating progress
         """
-        with self._lock:
-            if file_path in self._files:
-                file_info = self._files[file_path]
-                file_info.downloaded = bytes_downloaded
-                file_info.completed = bytes_downloaded >= file_info.size
+        try:
+            with self._lock:
+                if file_path in self._files:
+                    file_info = self._files[file_path]
+                    if bytes_downloaded < 0:
+                        raise ValueError("Downloaded bytes cannot be negative")
+                    file_info.downloaded = bytes_downloaded
+                    file_info.completed = bytes_downloaded >= file_info.size
+        except ValueError as e:
+            logger.error(f"Invalid progress value: {e}")
+            raise FileTrackingError(f"Invalid progress value: {e}")
+        except Exception as e:
+            logger.error(f"Error updating progress: {e}")
+            raise FileTrackingError(f"Failed to update progress: {e}")
                 
     def get_progress(self, file_path: str) -> Tuple[int, int]:
         """Get download progress for a file
@@ -134,31 +193,52 @@ class FileManager:
             
         Returns:
             Tuple of (bytes_downloaded, total_bytes)
+            
+        Raises:
+            FileTrackingError: If error getting progress
         """
-        with self._lock:
-            if file_path in self._files:
-                file_info = self._files[file_path]
-                return file_info.downloaded, file_info.size
-            return 0, 0
+        try:
+            with self._lock:
+                if file_path in self._files:
+                    file_info = self._files[file_path]
+                    return file_info.downloaded, file_info.size
+                return 0, 0
+        except Exception as e:
+            logger.error(f"Error getting progress: {e}")
+            raise FileTrackingError(f"Failed to get progress: {e}")
             
     def is_completed(self, file_path: str) -> bool:
         """Check if file download is completed
         
         Args:
             file_path: Path of file in repository
+            
+        Raises:
+            FileTrackingError: If error checking completion
         """
-        with self._lock:
-            if file_path in self._files:
-                return self._files[file_path].completed
-            return False
+        try:
+            with self._lock:
+                if file_path in self._files:
+                    return self._files[file_path].completed
+                return False
+        except Exception as e:
+            logger.error(f"Error checking completion: {e}")
+            raise FileTrackingError(f"Failed to check completion: {e}")
             
     def get_total_progress(self) -> Tuple[int, int]:
         """Get total download progress across all files
         
         Returns:
             Tuple of (total_bytes_downloaded, total_bytes)
+            
+        Raises:
+            FileTrackingError: If error calculating total progress
         """
-        with self._lock:
-            total_downloaded = sum(f.downloaded for f in self._files.values())
-            total_size = sum(f.size for f in self._files.values())
-            return total_downloaded, total_size
+        try:
+            with self._lock:
+                total_downloaded = sum(f.downloaded for f in self._files.values())
+                total_size = sum(f.size for f in self._files.values())
+                return total_downloaded, total_size
+        except Exception as e:
+            logger.error(f"Error calculating total progress: {e}")
+            raise FileTrackingError(f"Failed to calculate total progress: {e}")
