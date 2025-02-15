@@ -1,5 +1,6 @@
 import os
 import logging
+import argparse
 from pathlib import Path
 from typing import Optional, List, Union, Tuple
 from huggingface_hub import (
@@ -339,8 +340,6 @@ def validate_percentage(value):
 
 def main():
     """Command line interface."""
-    import argparse
-    
     parser = argparse.ArgumentParser(
         description="Fast and reliable downloader for Hugging Face models and datasets."
     )
