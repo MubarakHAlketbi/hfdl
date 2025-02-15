@@ -1,4 +1,4 @@
-# HFDL - Hugging Face Download Manager (version 0.2.1)
+# HFDL - Hugging Face Download Manager (version 0.2.2)
 
 An efficient downloader for Hugging Face models and datasets using official API methods.
 
@@ -68,7 +68,7 @@ hfdl username/model_name
 # Advanced options
 hfdl username/model_name \
     -d custom_dir \     # Custom directory (default: downloads)
-    -t 8 \              # Threads (0=auto)
+    -t 8 \              # Threads (auto=default)
     --verify \          # Verify downloads
     --force \           # Force fresh download
     --no-resume        # Disable resume capability
