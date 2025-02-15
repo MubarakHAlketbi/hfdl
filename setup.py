@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="hfdl",
-    version="0.2.0",
+    version="0.2.1",
     author="Mubarak H. Alketbi",
     author_email="mubarak.harran@gmail.com",
     description="Efficient Hugging Face downloader using official API methods",

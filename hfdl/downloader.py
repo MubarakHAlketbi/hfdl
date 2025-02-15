@@ -4,8 +4,10 @@ from pathlib import Path
 from typing import Optional, List, Union
 from huggingface_hub import (
     HfApi, 
-    hf_hub_download, 
     snapshot_download,
+    get_token
+)
+from huggingface_hub.utils import (
     RepositoryNotFoundError,
     RevisionNotFoundError,
     LocalEntryNotFoundError
@@ -79,13 +81,21 @@ class HFDownloader:
     def _get_auth_token(self) -> Optional[str]:
         """Get and validate authentication token."""
         try:
+            # Get token using root method
+            token = get_token()
+            if not token:
+                logger.warning("No authentication token found. Some repositories may be inaccessible.")
+                logger.info("To authenticate, run: huggingface-cli login")
+                return None
+
             # Validate token by making an API call
-            self.api.whoami()
-            return self.api.token
+            self.api.whoami(token=token)
+            return token
         except Exception as e:
             if "401" in str(e):
-                logger.warning("No valid authentication token found. Some repositories may be inaccessible.")
-                logger.info("To authenticate, run: huggingface-cli login")
+                logger.warning("Invalid or expired token. Please login again using: huggingface-cli login")
+            else:
+                logger.error(f"Error validating token: {e}")
             return None
 
     def _verify_repo_access(self) -> bool:
@@ -114,14 +124,6 @@ class HFDownloader:
             if not self._verify_repo_access():
                 return False
 
-            # Get repository information with file metadata
-            repo_info = self.api.repo_info(
-                repo_id=self.model_id,
-                repo_type=self.repo_type,
-                token=self.token,
-                files_metadata=True
-            )
-
             # Create output directory
             output_dir = self.download_dir / self.model_id.split('/')[-1]
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -129,7 +131,7 @@ class HFDownloader:
             logger.info(f"Downloading {self.model_id} to {output_dir}")
 
             try:
-                # Use snapshot_download for efficient downloading
+                # Use snapshot_download as root method
                 snapshot_download(
                     repo_id=self.model_id,
                     repo_type=self.repo_type,
