@@ -1,47 +1,42 @@
-# HFDL - Hugging Face Download Manager (version 0.1.22)
+# HFDL - Hugging Face Download Manager (version 0.2.0)
 
-An optimized downloader for Hugging Face models and datasets with intelligent resource management and verification.
+An efficient downloader for Hugging Face models and datasets using official API methods.
 
 ## Key Features
 
-- **Efficient Download Strategies**:
-  - Size-based prioritization (small files first)
-  - Configurable file size threshold (default: 200MB)
-  - Fallback size retrieval for API limitations
-  - Verified resume capability with Range requests
+- **Official API Integration**:
+  - Uses huggingface_hub's snapshot_download
+  - Built-in LFS support
+  - Automatic cache management
+  - Resume capability
+  - Progress tracking
 
 - **Resource Management**:
-  - CPU-optimized thread allocation
-  - Network bandwidth monitoring
-  - 5% disk space safety buffer
-  - Cross-platform file locking
+  - Optimized thread allocation
+  - Built-in caching system
+  - Automatic cleanup
   - System load awareness
 
 - **Verification & Safety**:
-  - Hybrid hashing (BLAKE3 for speed + SHA256 compatibility)
-  - File integrity checks
-  - Pre-allocation of disk space
+  - Built-in file verification
+  - Automatic integrity checks
+  - Resume capability
   - Graceful interruption handling
-  - Corrupted file redownload
 
 - **Authentication**:
+  - API-based token validation
   - Public repository support
-  - Private repo token handling
-  - Token validation
-  - Clear authentication errors
+  - Private repo access
+  - Clear error messages
 
 ## Requirements
 
 - Python 3.10+
 - Required packages:
   ```python
-  requests >=2.26.0
-  huggingface_hub >=0.11.0
+  huggingface_hub >=0.28.1
   tqdm >=4.62.0
-  portalocker >=2.3.2
-  blake3 >=0.3.0
   pydantic >=2.0.0
-  typing-extensions >=4.0.0
   ```
 
 ## Installation
@@ -72,12 +67,11 @@ hfdl username/model_name
 
 # Advanced options
 hfdl username/model_name \
-    -d custom_dir \          # Custom directory (default: downloads)
-    -t 8 \                   # Threads (0=auto)
-    --min-free-space 5000 \  # Minimum free space in MB (default)
-    --verify \               # Verify existing files
-    --fix-broken \           # Redownload corrupted files
-    --force                  # Ignore existing files
+    -d custom_dir \     # Custom directory (default: downloads)
+    -t 8 \              # Threads (0=auto)
+    --verify \          # Verify downloads
+    --force \           # Force fresh download
+    --no-resume        # Disable resume capability
 ```
 
 ### Python API
@@ -88,12 +82,10 @@ from hfdl import HFDownloader
 downloader = HFDownloader(
     model_id="username/model_name",
     download_dir="custom_dir",
-    num_threads=8,
-    min_free_space=5000,      # MB
-    file_size_threshold=200,  # MB
+    num_threads="auto",  # or specific number
     verify=True,
-    fix_broken=True,
-    force=False
+    force=False,
+    resume=True
 )
 downloader.download()
 ```
@@ -102,69 +94,55 @@ downloader.download()
 
 ### Core Components
 
-1. **File Classification**:
-   - Separates files into small/big based on threshold
-   - Handles missing size information via HEAD requests
+1. **API Integration**:
+   - Uses official huggingface_hub methods
+   - Proper HfApi instance management
+   - Built-in LFS support
+   - Automatic caching
 
 2. **Thread Management**:
-   - Auto-scales based on CPU cores:
-     - 1-2 cores: 2-4 threads
-     - 3-8 cores: 2x cores
-     - 8+ cores: min(32, 3x cores)
-   - Separate strategies for small/big files
+   - Auto-scales based on system capabilities
+   - Conservative thread allocation
+   - Built-in optimization
 
-3. **Speed Control**:
-   - Initial speed test for big files
-   - Dynamic rate limiting
-   - Minimum 1MB/s per thread
-   - Rolling average speed tracking
+3. **Download Management**:
+   - Automatic resume capability
+   - Progress tracking
+   - Cache utilization
+   - Error handling
 
 4. **State Management**:
-   - JSON state file with schema validation
-   - Progress tracking per file
-   - Automatic resume capability
-   - File lock synchronization
+   - Managed by huggingface_hub
+   - Automatic cache handling
+   - Built-in progress tracking
+   - File verification
 
-### Verification System
-
-1. **Hybrid Hashing**:
-   - BLAKE3 for fast large file verification
-   - SHA256 for API compatibility
-   - Size validation fallback
-
-2. **Safety Checks**:
-   - 5% disk space buffer
-   - Pre-allocation with posix_fallocate/seek
-   - Network timeout handling
-   - Retry with exponential backoff
-
-## Directory Structure
+### Directory Structure
 
 ```
 downloads/
 └── model-name/
     ├── config.json
     ├── model.safetensors
-    ├── pytorch_model.bin
-    └── .download_state  # JSON progress tracking
+    └── pytorch_model.bin
 ```
 
 ## Best Practices
 
 1. **Network Considerations**:
-   - Use default auto-threading unless specific needs
-   - Higher --file-size-threshold for slow connections
-   - Monitor with --speed-check-interval
+   - Use default auto-threading
+   - Let API handle download optimization
+   - Monitor progress with built-in tracking
 
 2. **System Resources**:
-   - Allow 1GB+ buffer for min-free-space
-   - Prefer fewer threads for low-memory systems
-   - SSD benefits from higher thread counts
+   - API handles resource management
+   - Automatic thread optimization
+   - Built-in caching system
 
 3. **Resuming Downloads**:
-   - Interrupt with Ctrl+C preserves state
-   - --verify checks existing files
-   - --fix-broken removes corrupted data
+   - Built-in resume capability
+   - Automatic verification
+   - Clear error reporting
 
 ## Development
 
@@ -186,7 +164,5 @@ MIT - See [LICENSE](LICENSE)
 
 ## Acknowledgments
 
-- Hugging Face Hub API
-- Requests for HTTP handling
-- tqdm progress bars
-- Portalocker for file locking
+- Hugging Face Hub API for core functionality
+- tqdm for progress bars
