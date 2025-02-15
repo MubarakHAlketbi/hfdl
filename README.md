@@ -1,4 +1,4 @@
-# HFDL - Hugging Face Download Manager (version 0.2.2)
+# HFDL - Hugging Face Download Manager (version 0.2.3)
 
 An efficient downloader for Hugging Face models and datasets using official API methods.
 
@@ -68,7 +68,8 @@ hfdl username/model_name
 # Advanced options
 hfdl username/model_name \
     -d custom_dir \     # Custom directory (default: downloads)
-    -t 8 \              # Threads (auto=default)
+    -t auto \           # Threads (auto or positive integer)
+    -r model \          # Repository type (model, dataset, space)
     --verify \          # Verify downloads
     --force \           # Force fresh download
     --no-resume        # Disable resume capability
@@ -81,11 +82,12 @@ from hfdl import HFDownloader
 
 downloader = HFDownloader(
     model_id="username/model_name",
-    download_dir="custom_dir",
-    num_threads="auto",  # or specific number
-    verify=True,
-    force=False,
-    resume=True
+    download_dir="custom_dir",     # default: "downloads"
+    num_threads=0,                 # 0=auto, or positive integer
+    repo_type="model",            # "model", "dataset", or "space"
+    verify=False,                 # verify downloads
+    force=False,                  # force fresh download
+    resume=True                   # allow resume
 )
 downloader.download()
 ```
@@ -129,20 +131,22 @@ downloads/
 
 ## Best Practices
 
-1. **Network Considerations**:
-   - Use default auto-threading
-   - Let API handle download optimization
-   - Monitor progress with built-in tracking
+1. **Thread Management**:
+   - Use 'auto' for optimal thread allocation
+   - Or specify a positive integer for manual control
+   - System will optimize based on available resources
 
-2. **System Resources**:
-   - API handles resource management
-   - Automatic thread optimization
-   - Built-in caching system
+2. **Download Options**:
+   - Enable resume for reliable downloads
+   - Use verify for extra safety
+   - Force download when needed
+   - Choose appropriate repo type
 
-3. **Resuming Downloads**:
-   - Built-in resume capability
-   - Automatic verification
-   - Clear error reporting
+3. **Error Handling**:
+   - Clear error messages
+   - Proper validation
+   - Automatic retry
+   - Progress feedback
 
 ## Development
 

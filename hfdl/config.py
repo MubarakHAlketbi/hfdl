@@ -8,10 +8,8 @@ class DownloadConfig(BaseConfig):
     @classmethod
     def create(cls, **kwargs) -> 'DownloadConfig':
         """Factory method to create config with proper validation"""
-        # Handle 'auto' threads specification
-        if isinstance(kwargs.get('num_threads'), str) and kwargs['num_threads'].lower() == 'auto':
-            kwargs['num_threads'] = cls.calculate_optimal_threads()
-        elif kwargs.get('num_threads', 0) <= 0:
+        # Handle auto thread specification (0 means auto)
+        if kwargs.get('num_threads', 0) <= 0:
             kwargs['num_threads'] = cls.calculate_optimal_threads()
 
         return cls(**kwargs)

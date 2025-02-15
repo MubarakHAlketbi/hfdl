@@ -48,8 +48,12 @@ class HFDownloader:
         self.model_id = self._normalize_repo_id(model_id)
         self.download_dir = Path(download_dir)
         self.repo_type = repo_type
+        
+        # Convert 'auto' to 0 for thread count
+        thread_count = 0 if isinstance(num_threads, str) and num_threads.lower() == 'auto' else num_threads
+        
         self.config = DownloadConfig.create(
-            num_threads=num_threads,
+            num_threads=thread_count,
             verify_downloads=verify,
             force_download=force
         )
@@ -157,6 +161,21 @@ class HFDownloader:
             logger.error(f"Download failed: {str(e)}")
             raise HFDownloadError(str(e)) from e
 
+def validate_threads(value):
+    """Validate thread count, allowing 'auto' or positive integers."""
+    if isinstance(value, str) and value.lower() == 'auto':
+        return 0  # 0 means auto
+    try:
+        ivalue = int(value)
+        if ivalue < 0:
+            raise ValueError
+        return ivalue
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"Invalid thread count: {value}\n"
+            "Must be 'auto' or a positive integer"
+        )
+
 def main():
     """Command line interface."""
     import argparse
@@ -165,8 +184,8 @@ def main():
         description="Fast and reliable downloader for Hugging Face models and datasets."
     )
     parser.add_argument("repo_id_or_url", help="Repository ID or URL")
-    parser.add_argument("-t", "--threads", type=int, default='auto',
-                       help="Number of threads (default: auto)")
+    parser.add_argument("-t", "--threads", type=validate_threads, default='auto',
+                       help="Number of threads (auto or positive integer)")
     parser.add_argument("-d", "--directory", default="downloads",
                        help="Download directory")
     parser.add_argument("-r", "--repo_type", default="model",

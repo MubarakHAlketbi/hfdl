@@ -17,6 +17,21 @@ def validate_model_id(value):
         )
     return repo_id
 
+def validate_threads(value):
+    """Validate thread count, allowing 'auto' or positive integers."""
+    if value.lower() == 'auto':
+        return 0  # 0 means auto in our implementation
+    try:
+        ivalue = int(value)
+        if ivalue < 0:
+            raise ValueError
+        return ivalue
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"Invalid thread count: {value}\n"
+            "Must be 'auto' or a positive integer"
+        )
+
 def main():
     parser = argparse.ArgumentParser(
         description='Hugging Face Downloader',
@@ -35,8 +50,8 @@ def main():
     # Basic options
     parser.add_argument('-d', '--directory', default='downloads',
                       help='Base download directory')
-    parser.add_argument('-t', '--threads', type=int, default='auto',
-                      help='Number of download threads (default: auto)')
+    parser.add_argument('-t', '--threads', type=validate_threads, default='auto',
+                      help='Number of download threads (auto or positive integer)')
     parser.add_argument('-r', '--repo-type', choices=['model', 'dataset', 'space'],
                       default='model', help='Repository type')
     
@@ -54,7 +69,7 @@ def main():
         downloader = HFDownloader(
             model_id=args.model_id,
             download_dir=args.directory,
-            num_threads=args.threads,
+            num_threads=args.threads,  # 0 means auto
             repo_type=args.repo_type,
             verify=args.verify,
             force=args.force,
