@@ -1,43 +1,15 @@
-# HFDL - Hugging Face Download Manager (version 0.3.0)
+# HFDL - Hugging Face Download Library
 
-An efficient downloader for Hugging Face models and datasets using official API methods.
+A fast and reliable downloader for Hugging Face models and datasets with enhanced features.
 
-## Key Features
+## Features
 
-- **Official API Integration**:
-  - Uses huggingface_hub's snapshot_download
-  - Built-in LFS support
-  - Automatic cache management
-  - Resume capability
-  - Progress tracking
-
-- **Resource Management**:
-  - Optimized thread allocation
-  - Built-in caching system
-  - Automatic cleanup
-  - System load awareness
-
-- **Verification & Safety**:
-  - Built-in file verification
-  - Automatic integrity checks
-  - Resume capability
-  - Graceful interruption handling
-
-- **Authentication**:
-  - API-based token validation
-  - Public repository support
-  - Private repo access
-  - Clear error messages
-
-## Requirements
-
-- Python 3.10+
-- Required packages:
-  ```python
-  huggingface_hub >=0.28.1
-  tqdm >=4.62.0
-  pydantic >=2.0.0
-  ```
+- Smart file categorization based on size
+- CPU-based thread auto-scaling
+- Bandwidth control and optimization
+- Progress tracking
+- Comprehensive error handling
+- Extensive test coverage
 
 ## Installation
 
@@ -45,128 +17,168 @@ An efficient downloader for Hugging Face models and datasets using official API 
 pip install hfdl
 ```
 
-From source:
+Or install from source:
 ```bash
-git clone https://github.com/MubarakHAlketbi/hfdl.git
+git clone https://github.com/yourusername/hfdl.git
 cd hfdl
 pip install -e .
 ```
 
-Authentication (for private repos):
-```bash
-huggingface-cli login
-```
-
-## Usage
-
-### Command Line
-
-```bash
-# Basic download
-hfdl username/model_name
-
-# Advanced options
-hfdl username/model_name \
-    -d custom_dir \     # Custom directory (default: downloads)
-    -t auto \           # Threads (auto or positive integer)
-    -r model \          # Repository type (model, dataset, space)
-    --verify \          # Verify downloads
-    --force \           # Force fresh download
-    --no-resume        # Disable resume capability
-```
-
-### Python API
+## Quick Start
 
 ```python
 from hfdl import HFDownloader
 
+# Basic usage
+downloader = HFDownloader("MaziyarPanahi/Qwen2.5-7B-Instruct-GGUF")
+downloader.download()
+
+# Enhanced mode with custom settings
 downloader = HFDownloader(
-    model_id="username/model_name",
-    download_dir="custom_dir",     # default: "downloads"
-    num_threads=0,                 # 0=auto, or positive integer
-    repo_type="model",            # "model", "dataset", or "space"
-    verify=False,                 # verify downloads
-    force=False,                  # force fresh download
-    resume=True                   # allow resume
+    "Anthropic/hh-rlhf",
+    repo_type="dataset",
+    enhanced_mode=True,
+    size_threshold_mb=100,
+    bandwidth_percentage=95
 )
 downloader.download()
 ```
 
-## Technical Implementation
-
-### Core Components
-
-1. **API Integration**:
-   - Uses official huggingface_hub methods
-   - Proper HfApi instance management
-   - Built-in LFS support
-   - Automatic caching
-
-2. **Thread Management**:
-   - Auto-scales based on system capabilities
-   - Conservative thread allocation
-   - Built-in optimization
-
-3. **Download Management**:
-   - Automatic resume capability
-   - Progress tracking
-   - Cache utilization
-   - Error handling
-
-4. **State Management**:
-   - Managed by huggingface_hub
-   - Automatic cache handling
-   - Built-in progress tracking
-   - File verification
-
-### Directory Structure
-
-```
-downloads/
-└── model-name/
-    ├── config.json
-    ├── model.safetensors
-    └── pytorch_model.bin
-```
-
-## Best Practices
-
-1. **Thread Management**:
-   - Use 'auto' for optimal thread allocation
-   - Or specify a positive integer for manual control
-   - System will optimize based on available resources
-
-2. **Download Options**:
-   - Enable resume for reliable downloads
-   - Use verify for extra safety
-   - Force download when needed
-   - Choose appropriate repo type
-
-3. **Error Handling**:
-   - Clear error messages
-   - Proper validation
-   - Automatic retry
-   - Progress feedback
-
-## Development
+## Command Line Usage
 
 ```bash
-# Install with dev dependencies
-pip install -e .[dev]
+# Basic usage
+hfdl MaziyarPanahi/Qwen2.5-7B-Instruct-GGUF
 
-# Run tests
-pytest tests/
+# Enhanced mode
+hfdl Anthropic/hh-rlhf --enhanced --size-threshold 100 --bandwidth 95
 
-# Linting
-flake8 hfdl/
-mypy hfdl/
+# Full options
+hfdl [repo_id] [options]
+  --enhanced            Enable enhanced features
+  --size-threshold MB   Size threshold for file categorization
+  --bandwidth PERCENT   Bandwidth usage percentage
+  --measure-time SECS   Speed measurement duration
+  --threads NUM        Number of download threads
+  --directory PATH     Download directory
+  --repo-type TYPE     Repository type (model/dataset/space)
+  --verify             Verify downloads
+  --force              Force fresh download
+  --no-resume          Disable download resuming
+```
+
+## Error Handling
+
+HFDL provides comprehensive error handling:
+
+### Error Types
+
+1. Download Errors:
+   - `HFDownloadError`: Base exception for all errors
+   - `ThreadManagerError`: Thread-related errors
+   - `FileManagerError`: File operation errors
+   - `SpeedManagerError`: Speed control errors
+
+2. Specific Errors:
+   - `FileSizeError`: File size calculation issues
+   - `FileTrackingError`: Progress tracking issues
+   - `SpeedMeasurementError`: Speed measurement issues
+   - `SpeedAllocationError`: Speed allocation issues
+
+### Error Recovery
+
+HFDL implements automatic error recovery:
+- Network retry mechanisms
+- Resource cleanup
+- State recovery
+- Fallback to legacy mode
+
+### Thread Safety
+
+All operations are thread-safe:
+- Resource protection
+- State consistency
+- Safe cleanup
+- Error propagation
+
+## Testing
+
+HFDL includes comprehensive test coverage:
+
+### Running Tests
+
+```bash
+# Install test dependencies
+pip install pytest pytest-mock
+
+# Run all tests
+pytest hfdl/tests/
+
+# Run specific test categories
+pytest -v -k "error" hfdl/tests/      # Error handling tests
+pytest -v -k "thread_safety" hfdl/tests/  # Thread safety tests
+pytest -v hfdl/tests/test_downloader.py   # Downloader tests
+```
+
+### Test Categories
+
+1. Unit Tests:
+   - Component functionality
+   - Error handling
+   - Input validation
+   - State management
+
+2. Integration Tests:
+   - Component interaction
+   - Error propagation
+   - Resource management
+   - System behavior
+
+3. Error Tests:
+   - Error scenarios
+   - Recovery mechanisms
+   - Resource cleanup
+   - State consistency
+
+4. Thread Safety Tests:
+   - Concurrent operations
+   - Resource contention
+   - State consistency
+   - Error handling
+
+## Contributing
+
+1. Fork the repository
+2. Create your feature branch
+3. Add tests for your changes
+4. Ensure all tests pass
+5. Submit a pull request
+
+## Development Setup
+
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/hfdl.git
+cd hfdl
+```
+
+2. Create virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+venv\Scripts\activate     # Windows
+```
+
+3. Install dependencies:
+```bash
+pip install -e ".[dev]"
+```
+
+4. Run tests:
+```bash
+pytest hfdl/tests/
 ```
 
 ## License
 
-MIT - See [LICENSE](LICENSE)
-
-## Acknowledgments
-
-- Hugging Face Hub API for core functionality
-- tqdm for progress bars
+This project is licensed under the MIT License - see the LICENSE file for details.

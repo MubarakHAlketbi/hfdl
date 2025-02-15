@@ -2,121 +2,91 @@
 
 This document catalogs all tests implemented in the HFDL test suite.
 
-## Downloader Tests (test_downloader.py)
+## Core Components
 
-### Repository ID Normalization
-- `test_normalize_repo_id`: Validates repository ID normalization from URLs and direct IDs
-  * Tests real model repo (MaziyarPanahi/Qwen2.5-7B-Instruct-GGUF)
-  * Tests real dataset repo (Anthropic/hh-rlhf)
-  * Tests URLs with trailing slashes
+### Downloader Tests (test_downloader.py)
 
-- `test_normalize_repo_id_invalid`: Tests invalid repository ID handling
-  * Empty input
-  * Invalid format (no slash)
+1. **Repository ID Tests**
+   - `test_normalize_repo_id`: URL and ID normalization
+     * Real model repo (MaziyarPanahi/Qwen2.5-7B-Instruct-GGUF)
+     * Real dataset repo (Anthropic/hh-rlhf)
+     * URL variations
+   
+   - `test_normalize_repo_id_invalid`: Invalid input handling
+     * Empty input
+     * Invalid format
 
-### Repository Initialization
-- `test_real_model_initialization`: Tests model repository initialization
-- `test_real_model_url_initialization`: Tests model URL initialization
-- `test_real_dataset_initialization`: Tests dataset repository initialization
-- `test_real_dataset_url_initialization`: Tests dataset URL initialization
-- `test_downloader_initialization_custom`: Tests custom initialization parameters
+2. **Repository Access Tests**
+   - `test_real_model_repo_access`: Real model access
+   - `test_real_dataset_repo_access`: Real dataset access
+   - `test_fake_repository_access`: Non-existent repo
+   - `test_wrong_repo_type`: Invalid repo type
 
-### Repository Access
-- `test_fake_repository_access`: Tests non-existent model repository
-- `test_fake_dataset_access`: Tests non-existent dataset repository
-- `test_real_model_repo_access`: Tests real model repository access (integration)
-- `test_real_dataset_repo_access`: Tests real dataset repository access (integration)
-- `test_nonexistent_repo_download`: Tests download of non-existent repository
-- `test_wrong_repo_type`: Tests repository type validation
-- `test_mixed_url_types`: Tests different URL format variations
+3. **Error Handling Tests**
+   - `test_http_error_handling`: Network errors
+   - `test_filesystem_error_handling`: File system errors
+   - `test_environment_error_handling`: System errors
+   - `test_entry_not_found_handling`: Missing files
 
-### Error Handling
-- `test_http_error_handling`: Tests network error handling
-  * Connection failures
-  * Timeout errors
-  * Server errors
+### Thread Manager Tests (test_thread_manager.py)
 
-- `test_filesystem_error_handling`: Tests file system error handling
-  * Permission denied
-  * Disk full
-  * Invalid paths
+1. **Initialization Tests**
+   - `test_thread_scenario_detection`: CPU scenario detection
+   - `test_initialization_error`: Init error handling
+   - `test_signal_handler_error`: Signal handling errors
+   - `test_thread_creation_error`: Thread creation errors
 
-- `test_environment_error_handling`: Tests system environment errors
-  * Resource limits
-  * Memory constraints
-  * System configuration issues
+2. **Thread Pool Tests**
+   - `test_thread_pool_error`: Pool creation errors
+   - `test_submit_without_start`: Unstarted manager
+   - `test_submit_error`: Task submission errors
+   - `test_shutdown_error`: Shutdown errors
 
-- `test_entry_not_found_handling`: Tests missing file/entry errors
-  * Missing repository files
-  * Invalid file paths
-  * Non-existent entries
+3. **Thread Safety Tests**
+   - `test_ctrl_c_handler_error`: Signal handler errors
+   - `test_context_manager`: Context handling
+   - `test_graceful_shutdown`: Clean shutdown
+   - `test_multiple_stop_calls`: Multiple stops
 
-### Configuration
-- `test_thread_count_validation`: Tests thread count validation
-  * Auto thread detection
-  * Manual thread specification
+### File Manager Tests (test_file_manager.py)
 
-## Thread Manager Tests (test_thread_manager.py)
+1. **File Operation Tests**
+   - `test_initialization_error`: Init error handling
+   - `test_file_info_creation`: FileInfo creation
+   - `test_repository_not_found`: Missing repo
+   - `test_revision_not_found`: Bad revision
 
-### Scenario Detection
-- `test_thread_scenario_detection`: Tests CPU-based scenario selection
-- `test_download_threads_calculation`: Tests download thread calculation
+2. **Error Handling Tests**
+   - `test_network_error`: Network failures
+   - `test_metadata_error`: Metadata errors
+   - `test_file_size_error`: Size calculation
+   - `test_progress_tracking_error`: Progress errors
 
-### Thread Management
-- `test_thread_manager_context`: Tests context manager functionality
-- `test_ctrl_c_handler`: Tests ctrl+c signal handling
-- `test_submit_download`: Tests download task submission
-- `test_submit_without_start`: Tests error handling for unstarted manager
+3. **Thread Safety Tests**
+   - `test_progress_calculation_error`: Progress errors
+   - `test_total_progress_error`: Total progress
+   - `test_thread_safety`: Concurrent operations
+   - `test_file_categorization`: Size categorization
 
-## File Manager Tests (test_file_manager.py)
+### Speed Manager Tests (test_speed_manager.py)
 
-### File Information
-- `test_file_info_creation`: Tests FileInfo dataclass creation
-- `test_file_categorization`: Tests size-based file categorization
+1. **Initialization Tests**
+   - `test_initialization_errors`: Init validation
+   - `test_speed_measurement_calculation`: Speed calc
+   - `test_repository_errors`: Repo errors
+   - `test_network_errors`: Network errors
 
-### Progress Tracking
-- `test_progress_tracking`: Tests download progress tracking
-- `test_total_progress`: Tests total progress calculation
-- `test_thread_safety`: Tests thread-safe operations
+2. **Speed Measurement Tests**
+   - `test_measurement_errors`: Measurement errors
+   - `test_allocation_errors`: Allocation errors
+   - `test_successful_speed_measurement`: Valid speed
+   - `test_thread_speed_allocation`: Speed allocation
 
-### Error Handling
-- `test_repository_not_found`: Tests repository not found error
-- `test_thread_safety`: Tests concurrent operations
-
-## Speed Manager Tests (test_speed_manager.py)
-
-### Speed Measurement
-- `test_speed_measurement_calculation`: Tests speed calculation
-- `test_speed_measurement_zero_duration`: Tests zero duration handling
-- `test_initial_speed_measurement`: Tests initial speed measurement
-
-### Speed Allocation
-- `test_thread_speed_allocation`: Tests speed allocation for threads
-- `test_multiple_thread_allocation`: Tests multi-thread speed allocation
-- `test_get_thread_speed`: Tests retrieving allocated speeds
-- `test_get_nonexistent_thread_speed`: Tests non-existent thread handling
-
-### Error Handling
-- `test_speed_measurement_error_handling`: Tests measurement error handling
-- `test_allocation_without_measurement`: Tests allocation without measurement
-- `test_thread_safety`: Tests concurrent operations
-
-## Shared Test Resources (conftest.py)
-
-### Fixtures
-- `mock_api`: Mock HfApi instance
-- `temp_dir`: Temporary directory management
-- `real_model_repo`: Real model repository information
-- `real_dataset_repo`: Real dataset repository information
-- `fake_repos`: Fake repository information
-- `sample_repo_files`: Sample file list
-- `sample_file_sizes`: Sample file sizes
-- `setup_logging`: Logging configuration
-
-### Configuration
-- Test markers configuration
-- Logging setup
-- Cleanup handlers
+3. **Thread Safety Tests**
+   - `test_thread_safety`: Concurrent operations
+   - `test_multiple_thread_allocation`: Multi-thread
+   - `test_speed_measurement_zero_duration`: Zero duration
+   - `test_get_thread_speed`: Speed retrieval
 
 ## Test Categories
 
@@ -124,19 +94,25 @@ This document catalogs all tests implemented in the HFDL test suite.
 - Basic component functionality
 - Input validation
 - Error handling
-- Configuration
+- State management
 
 ### Integration Tests
-- Repository access
-- Download operations
-- Thread management
-- Speed control
+- Component interaction
+- Error propagation
+- Resource management
+- System behavior
 
 ### Error Tests
 - Network errors
 - File system errors
 - Environment errors
-- Missing file errors
+- Missing files/entries
+
+### Thread Safety Tests
+- Concurrent operations
+- Resource contention
+- State consistency
+- Error handling
 
 ## Running Tests
 
@@ -147,11 +123,11 @@ pytest hfdl/tests/
 # Run specific test file
 pytest hfdl/tests/test_downloader.py
 
-# Run integration tests only
-pytest -m integration hfdl/tests/
+# Run error tests
+pytest -v -k "error" hfdl/tests/
 
-# Run error handling tests
-pytest -k "error" hfdl/tests/
+# Run thread safety tests
+pytest -v -k "thread_safety" hfdl/tests/
 
 # Run with detailed output
 pytest -v hfdl/tests/
@@ -169,3 +145,75 @@ hfdl/tests/
 ├── test_thread_manager.py
 ├── test_file_manager.py
 └── test_speed_manager.py
+```
+
+## Shared Test Resources
+
+### Fixtures (conftest.py)
+- `mock_api`: Mock HfApi instance
+- `temp_dir`: Temporary directory
+- `real_model_repo`: Real model info
+- `real_dataset_repo`: Real dataset info
+- `fake_repos`: Fake repo info
+- `sample_repo_files`: Sample files
+- `sample_file_sizes`: Sample sizes
+- `setup_logging`: Logging config
+
+### Configuration (pytest.ini)
+- Test markers
+- Logging setup
+- Test categories
+- Output format
+
+## Test Coverage Areas
+
+1. **Error Handling**
+   - Input validation
+   - Network errors
+   - File system errors
+   - Thread errors
+   - Resource errors
+
+2. **Thread Safety**
+   - Resource protection
+   - State consistency
+   - Error propagation
+   - Clean shutdown
+
+3. **Resource Management**
+   - Initialization
+   - Usage tracking
+   - Cleanup
+   - Error recovery
+
+4. **Performance**
+   - Speed measurement
+   - Thread allocation
+   - Resource usage
+   - Error impact
+
+## Future Test Areas
+
+1. **Stress Testing**
+   - High load scenarios
+   - Resource limits
+   - Error conditions
+   - Recovery testing
+
+2. **Performance Testing**
+   - Speed benchmarks
+   - Resource usage
+   - Scalability tests
+   - Optimization verification
+
+3. **Network Testing**
+   - Connection issues
+   - Bandwidth limits
+   - Timeout scenarios
+   - Error recovery
+
+4. **Integration Testing**
+   - System integration
+   - Component interaction
+   - Error propagation
+   - State management
