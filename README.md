@@ -1,4 +1,4 @@
-# HFDL - Hugging Face Download Manager (version 0.2.3)
+# HFDL - Hugging Face Download Manager (version 0.3.0)
 
 An efficient downloader for Hugging Face models and datasets using official API methods.
 
