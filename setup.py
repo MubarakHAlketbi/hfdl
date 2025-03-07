@@ -24,7 +24,7 @@ dev_requirements = [
 
 setup(
     name="hfdl",
-    version="0.3.0",
+    version="0.3.1",
     description="Fast and reliable downloader for Hugging Face models and datasets",
     long_description=open('README.md').read(),
     long_description_content_type='text/markdown',

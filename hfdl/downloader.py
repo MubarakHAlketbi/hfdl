@@ -1,11 +1,13 @@
 import os
 import logging
 import argparse
+import time
+import requests
 from pathlib import Path
-from typing import Optional, List, Union, Tuple
+from typing import Optional, List, Union, Tuple, Dict, Any
 from requests.exceptions import HTTPError
 from huggingface_hub import (
-    HfApi, 
+    HfApi,
     snapshot_download,
     get_token,
     hf_hub_download
@@ -158,6 +160,130 @@ class HFDownloader:
         except Exception as e:
             logger.error(f"Error accessing repository: {e}")
             return False
+            
+    def _speed_controlled_download(
+        self,
+        repo_id: str,
+        filename: str,
+        local_dir: Union[str, Path],
+        thread_id: int,
+        max_speed_bps: float,
+        **kwargs
+    ) -> Optional[str]:
+        """
+        Download a file with speed control.
+        
+        Args:
+            repo_id: Repository ID
+            filename: Path to file in repository
+            local_dir: Local directory to save file
+            thread_id: Thread ID for speed allocation
+            max_speed_bps: Maximum speed in bytes per second
+            **kwargs: Additional arguments for download
+            
+        Returns:
+            Path to downloaded file or None if failed
+        """
+        try:
+            # Get download URL
+            url = self.api.hf_hub_url(repo_id, filename, revision="main")
+            
+            # Setup headers
+            headers = {}
+            if self.token:
+                headers["authorization"] = f"Bearer {self.token}"
+                
+            # Prepare local path
+            local_dir = Path(local_dir)
+            local_path = local_dir / filename
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Get file info for progress tracking
+            etag = None
+            temp_file = None
+            resume_size = 0
+            
+            # Check if file exists for resuming
+            if local_path.exists() and kwargs.get("resume_download", True):
+                temp_file = str(local_path)
+                resume_size = os.path.getsize(temp_file)
+                if resume_size > 0:
+                    headers["Range"] = f"bytes={resume_size}-"
+                    logger.info(f"Resuming download from {resume_size} bytes")
+            else:
+                if kwargs.get("force_download", False) and local_path.exists():
+                    logger.info(f"Removing existing file: {local_path}")
+                    local_path.unlink()
+                    
+                # Create temporary file
+                temp_file = str(local_path) + ".partial"
+                resume_size = 0
+                
+            # Open file for writing
+            mode = "ab" if resume_size > 0 else "wb"
+            
+            with open(temp_file, mode) as f:
+                with requests.get(url, headers=headers, stream=True) as response:
+                    response.raise_for_status()
+                    
+                    # Get total file size
+                    total_size = int(response.headers.get("content-length", 0))
+                    if resume_size > 0:
+                        total_size += resume_size
+                        
+                    # Setup progress tracking
+                    progress = tqdm(
+                        unit="B",
+                        unit_scale=True,
+                        total=total_size,
+                        initial=resume_size,
+                        desc=f"Downloading {filename}"
+                    )
+                    
+                    # Download with speed control
+                    chunk_size = self.config.download_chunk_size
+                    downloaded = resume_size
+                    start_time = time.time()
+                    
+                    for chunk in response.iter_content(chunk_size=chunk_size):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            progress.update(len(chunk))
+                            
+                            # Update file manager progress
+                            if self.file_manager:
+                                self.file_manager.update_progress(filename, downloaded)
+                                
+                            # Apply speed control if needed
+                            if max_speed_bps > 0:
+                                elapsed = time.time() - start_time
+                                if elapsed > 0:
+                                    current_speed = downloaded / elapsed
+                                    if current_speed > max_speed_bps:
+                                        # Calculate sleep time to maintain speed limit
+                                        sleep_time = (downloaded / max_speed_bps) - elapsed
+                                        if sleep_time > 0:
+                                            time.sleep(sleep_time)
+                    
+                    progress.close()
+                    
+            # Rename temp file to final file if needed
+            if temp_file != str(local_path):
+                os.replace(temp_file, local_path)
+                
+            logger.info(f"Successfully downloaded {filename}")
+            return str(local_path)
+            
+        except HTTPError as e:
+            logger.error(f"HTTP error downloading {filename}: {e}")
+            return None
+        except OSError as e:
+            logger.error(f"OS error downloading {filename}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error downloading {filename}: {e}")
+            return None
 
     def _download_enhanced(self) -> bool:
         """Download using enhanced features with size-based optimization"""
@@ -190,10 +316,16 @@ class HFDownloader:
             output_dir = self.download_dir / self.model_id.split('/')[-1]
             output_dir.mkdir(parents=True, exist_ok=True)
             
+            # Track failed downloads
+            failed_files = []
+            
             with self.thread_manager:
                 # Download small files first
                 if small_files:
                     logger.info(f"Downloading {len(small_files)} small files...")
+                    
+                    # Use thread pool for small files too for better performance
+                    small_file_futures = []
                     for file in small_files:
                         if self.thread_manager.should_stop:
                             logger.info("Download cancelled by user")
@@ -203,7 +335,9 @@ class HFDownloader:
                             local_path = output_dir / file.local_path
                             local_path.parent.mkdir(parents=True, exist_ok=True)
                             
-                            hf_hub_download(
+                            # Submit to thread pool
+                            future = self.thread_manager.submit_download(
+                                hf_hub_download,
                                 repo_id=self.model_id,
                                 filename=file.path_in_repo,
                                 repo_type=self.repo_type,
@@ -213,22 +347,27 @@ class HFDownloader:
                                 force_download=self.config.force_download,
                                 resume_download=self.resume
                             )
-                            self.file_manager.update_progress(
-                                file.path_in_repo,
-                                file.size
-                            )
-                        except EntryNotFoundError as e:
-                            logger.error(f"File not found in repository: {file.name} - {e}")
-                            continue
-                        except HTTPError as e:
-                            logger.error(f"Network error downloading {file.name}: {e}")
-                            continue
-                        except OSError as e:
-                            logger.error(f"File system error saving {file.name}: {e}")
-                            continue
+                            small_file_futures.append((future, file))
+                            
                         except Exception as e:
+                            logger.error(f"Error submitting download for {file.name}: {e}")
+                            failed_files.append(file.path_in_repo)
+                    
+                    # Check results of small file downloads
+                    for future, file in small_file_futures:
+                        try:
+                            result = future.result()
+                            if result:
+                                self.file_manager.update_progress(
+                                    file.path_in_repo,
+                                    file.size
+                                )
+                            else:
+                                failed_files.append(file.path_in_repo)
+                                logger.error(f"Failed to download: {file.name}")
+                        except Exception as e:
+                            failed_files.append(file.path_in_repo)
                             logger.error(f"Error downloading {file.name}: {e}")
-                            continue
                 
                 # Handle big files with bandwidth control
                 if big_files:
@@ -251,6 +390,7 @@ class HFDownloader:
                     # Download big files with speed control
                     download_threads = self.thread_manager.get_download_threads()
                     total_size = sum(f.size for f in big_files)
+                    big_file_futures = []
                     
                     for i, file in enumerate(big_files):
                         if self.thread_manager.should_stop:
@@ -267,34 +407,41 @@ class HFDownloader:
                                 total_files=len(big_files)
                             )
                             
-                            local_path = output_dir / file.local_path
-                            local_path.parent.mkdir(parents=True, exist_ok=True)
-                            
-                            # Submit download to thread pool
-                            self.thread_manager.submit_download(
-                                hf_hub_download,
+                            # Submit download to thread pool with speed control
+                            future = self.thread_manager.submit_download(
+                                self._speed_controlled_download,
                                 repo_id=self.model_id,
                                 filename=file.path_in_repo,
-                                repo_type=self.repo_type,
                                 local_dir=output_dir,
-                                local_dir_use_symlinks=False,
-                                token=self.token,
+                                thread_id=i % download_threads,
+                                max_speed_bps=thread_speed,
+                                repo_type=self.repo_type,
                                 force_download=self.config.force_download,
                                 resume_download=self.resume
                             )
-                        except EntryNotFoundError as e:
-                            logger.error(f"File not found in repository: {file.name} - {e}")
-                            continue
-                        except HTTPError as e:
-                            logger.error(f"Network error downloading {file.name}: {e}")
-                            continue
-                        except OSError as e:
-                            logger.error(f"File system error saving {file.name}: {e}")
-                            continue
+                            big_file_futures.append((future, file))
+                            
                         except Exception as e:
+                            logger.error(f"Error submitting download for {file.name}: {e}")
+                            failed_files.append(file.path_in_repo)
+                    
+                    # Check results of big file downloads
+                    for future, file in big_file_futures:
+                        try:
+                            result = future.result()
+                            if not result:
+                                failed_files.append(file.path_in_repo)
+                                logger.error(f"Failed to download: {file.name}")
+                        except Exception as e:
+                            failed_files.append(file.path_in_repo)
                             logger.error(f"Error downloading {file.name}: {e}")
-                            continue
             
+            # Check for failed downloads
+            if failed_files:
+                for file_path in failed_files:
+                    logger.error(f"Failed to download: {file_path}")
+                return False
+                
             return True
             
         except EnvironmentError as e:

@@ -1,7 +1,7 @@
 import os
 import threading
 from dataclasses import dataclass
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any
 from pathlib import Path
 import logging
 from huggingface_hub import HfApi
@@ -10,6 +10,7 @@ from huggingface_hub.utils import (
     EntryNotFoundError,
     RevisionNotFoundError
 )
+from huggingface_hub.hf_api import RepoFile
 from requests.exceptions import HTTPError
 
 logger = logging.getLogger(__name__)
@@ -75,9 +76,9 @@ class FileManager:
             FileManagerError: For other errors
         """
         try:
-            # Get list of files from repository
+            # Get repository tree with file metadata in a single API call
             try:
-                files = self.api.list_repo_files(
+                repo_files = self.api.list_repo_tree(
                     repo_id=repo_id,
                     repo_type=repo_type,
                     token=token
@@ -86,58 +87,45 @@ class FileManager:
                 logger.error(f"Repository error: {e}")
                 raise
             except HTTPError as e:
-                logger.error(f"Network error listing files: {e}")
+                logger.error(f"Network error listing repository tree: {e}")
                 raise
             except Exception as e:
-                logger.error(f"Error listing repository files: {e}")
-                raise FileManagerError(f"Failed to list repository files: {e}")
+                logger.error(f"Error listing repository tree: {e}")
+                raise FileManagerError(f"Failed to list repository tree: {e}")
             
             small_files: List[FileInfo] = []
             big_files: List[FileInfo] = []
             
-            # Get file sizes and categorize
-            for file_path in files:
+            # Process file metadata and categorize
+            for repo_file in repo_files:
                 try:
-                    # Get file metadata
-                    try:
-                        metadata = self.api.get_repo_file_metadata(
-                            repo_id=repo_id,
-                            repo_type=repo_type,
-                            path=file_path,
-                            token=token
-                        )
-                    except EntryNotFoundError:
-                        logger.warning(f"File not found: {file_path}")
+                    # Skip directories
+                    if repo_file.type == "directory":
                         continue
-                    except HTTPError as e:
-                        logger.error(f"Network error getting metadata for {file_path}: {e}")
-                        raise
-                    
+                        
                     # Create file info
                     try:
                         file_info = FileInfo(
-                            name=Path(file_path).name,
-                            size=metadata.size,
-                            path_in_repo=file_path,
-                            local_path=Path(file_path)
+                            name=Path(repo_file.path).name,
+                            size=repo_file.size,
+                            path_in_repo=repo_file.path,
+                            local_path=Path(repo_file.path)
                         )
                     except Exception as e:
-                        logger.error(f"Error creating FileInfo for {file_path}: {e}")
+                        logger.error(f"Error creating FileInfo for {repo_file.path}: {e}")
                         raise FileSizeError(f"Failed to process file info: {e}")
                     
                     # Categorize based on size
-                    if metadata.size <= self.size_threshold_bytes:
+                    if repo_file.size <= self.size_threshold_bytes:
                         small_files.append(file_info)
                     else:
                         big_files.append(file_info)
                         
                     with self._lock:
-                        self._files[file_path] = file_info
+                        self._files[repo_file.path] = file_info
                         
-                except (HTTPError, FileSizeError) as e:
-                    raise
                 except Exception as e:
-                    logger.error(f"Unexpected error processing {file_path}: {e}")
+                    logger.error(f"Unexpected error processing {repo_file.path}: {e}")
                     raise FileManagerError(f"Failed to process file: {e}")
                     
             # Sort files by size (ascending for small, descending for big)

@@ -116,6 +116,38 @@ class SpeedManager:
             if token:
                 headers["authorization"] = f"Bearer {token}"
                 
+            # Check file size first to ensure it's large enough for accurate measurement
+            try:
+                metadata = self.api.get_repo_file_metadata(
+                    repo_id=repo_id,
+                    repo_type="model",
+                    path=sample_file,
+                    token=token
+                )
+                
+                # Define minimum size for accurate measurement (10MB)
+                MIN_SAMPLE_SIZE = 10 * 1024 * 1024
+                
+                if metadata.size < MIN_SAMPLE_SIZE:
+                    logger.warning(
+                        f"Sample file size ({metadata.size / 1024 / 1024:.2f} MB) is smaller than "
+                        f"recommended minimum ({MIN_SAMPLE_SIZE / 1024 / 1024:.2f} MB). "
+                        f"Speed measurement may be less accurate."
+                    )
+                    
+                    # Adjust measurement duration for small files to ensure we don't download the entire file too quickly
+                    if metadata.size < MIN_SAMPLE_SIZE:
+                        adjusted_duration = max(2, self.measure_duration * (metadata.size / MIN_SAMPLE_SIZE))
+                        logger.info(f"Adjusting measurement duration to {adjusted_duration:.2f} seconds")
+                    else:
+                        adjusted_duration = self.measure_duration
+                else:
+                    adjusted_duration = self.measure_duration
+                    
+            except Exception as e:
+                logger.warning(f"Could not check sample file size: {e}. Using default measurement duration.")
+                adjusted_duration = self.measure_duration
+            
             # Measure download speed
             start_time = time.time()
             bytes_downloaded = 0
@@ -123,6 +155,9 @@ class SpeedManager:
             try:
                 with requests.get(url, headers=headers, stream=True) as response:
                     response.raise_for_status()
+                    
+                    # Get total file size from headers if available
+                    total_size = int(response.headers.get("content-length", 0))
                     
                     for chunk in response.iter_content(chunk_size=self.chunk_size):
                         if chunk:
@@ -143,8 +178,8 @@ class SpeedManager:
                                 logger.error(f"Error recording measurement: {e}")
                                 raise SpeedMeasurementError(f"Failed to record measurement: {e}")
                                 
-                            # Stop after measure_duration seconds
-                            if duration >= self.measure_duration:
+                            # Stop after adjusted_duration seconds or if we've downloaded at least 25% of the file
+                            if duration >= adjusted_duration or (total_size > 0 and bytes_downloaded >= total_size * 0.25):
                                 break
                                 
             except (HTTPError, ConnectionError, Timeout) as e:
