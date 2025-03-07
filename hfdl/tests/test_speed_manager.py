@@ -152,13 +152,20 @@ def test_allocation_errors(speed_manager):
 
 def test_successful_speed_measurement(mock_api, speed_manager):
     """Test successful speed measurement"""
+    # Mock API calls
     mock_api.hf_hub_url.return_value = "https://test.com/file"
+    
+    # Mock file metadata
+    mock_metadata = Mock()
+    mock_metadata.size = 20 * 1024 * 1024  # 20MB, larger than minimum
+    mock_api.get_repo_file_metadata.return_value = mock_metadata
     
     # Mock successful download
     mock_response = MagicMock()
     mock_response.iter_content.return_value = [
         b"x" * 8192 for _ in range(10)  # 10 chunks of 8KB
     ]
+    mock_response.headers = {"content-length": str(10 * 8192)}
     
     with patch('requests.get', return_value=mock_response):
         speed = speed_manager.measure_initial_speed(
@@ -170,6 +177,10 @@ def test_successful_speed_measurement(mock_api, speed_manager):
         assert speed > 0
         assert speed == speed_manager.allowed_speed
         assert speed == speed_manager._allowed_speed * 0.95  # 95% of measured speed
+        
+        # Verify API calls were made correctly
+        mock_api.hf_hub_url.assert_called_once_with("test/repo", "test.bin", revision="main")
+        mock_api.get_repo_file_metadata.assert_called_once()
 
 def test_thread_speed_allocation(speed_manager):
     """Test thread speed allocation"""

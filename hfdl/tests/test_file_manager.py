@@ -8,6 +8,7 @@ from huggingface_hub.utils import (
     EntryNotFoundError,
     RevisionNotFoundError
 )
+from huggingface_hub.hf_api import RepoFile
 from hfdl.file_manager import (
     FileManager,
     FileInfo,
@@ -51,7 +52,7 @@ def test_file_info_creation():
 
 def test_repository_not_found(mock_api, file_manager):
     """Test handling of repository not found error"""
-    mock_api.list_repo_files.side_effect = RepositoryNotFoundError("Not found")
+    mock_api.list_repo_tree.side_effect = RepositoryNotFoundError("Not found")
     
     with pytest.raises(RepositoryNotFoundError):
         file_manager.discover_files(
@@ -61,7 +62,7 @@ def test_repository_not_found(mock_api, file_manager):
 
 def test_revision_not_found(mock_api, file_manager):
     """Test handling of revision not found error"""
-    mock_api.list_repo_files.side_effect = RevisionNotFoundError("Bad revision")
+    mock_api.list_repo_tree.side_effect = RevisionNotFoundError("Bad revision")
     
     with pytest.raises(RevisionNotFoundError):
         file_manager.discover_files(
@@ -71,7 +72,7 @@ def test_revision_not_found(mock_api, file_manager):
 
 def test_network_error(mock_api, file_manager):
     """Test handling of network errors"""
-    mock_api.list_repo_files.side_effect = HTTPError("Network failed")
+    mock_api.list_repo_tree.side_effect = HTTPError("Network failed")
     
     with pytest.raises(HTTPError):
         file_manager.discover_files(
@@ -81,29 +82,31 @@ def test_network_error(mock_api, file_manager):
 
 def test_metadata_error(mock_api, file_manager):
     """Test handling of metadata retrieval errors"""
-    # Mock successful file list
-    mock_api.list_repo_files.return_value = ["file1.txt"]
+    # This test is no longer needed since we're using list_repo_tree
+    # which provides metadata directly, but we'll keep it for completeness
+    # by testing a different error case
     
-    # Mock metadata error
-    mock_api.get_repo_file_metadata.side_effect = EntryNotFoundError("No metadata")
+    # Mock repo_tree with a malformed RepoFile (missing required attributes)
+    class MalformedRepoFile:
+        def __init__(self):
+            self.path = "malformed.txt"
+            # Missing size and type attributes
     
-    # Should continue without the file
-    small_files, big_files = file_manager.discover_files(
-        repo_id="test/repo",
-        repo_type="model"
-    )
-    assert len(small_files) == 0
-    assert len(big_files) == 0
+    mock_api.list_repo_tree.return_value = [MalformedRepoFile()]
+    
+    # Should raise an error when trying to access missing attributes
+    with pytest.raises(FileSizeError, match="Failed to process file info"):
+        file_manager.discover_files(
+            repo_id="test/repo",
+            repo_type="model"
+        )
 
 def test_file_size_error(mock_api, file_manager):
     """Test handling of file size calculation errors"""
-    # Mock successful file list
-    mock_api.list_repo_files.return_value = ["file1.txt"]
-    
-    # Mock metadata with invalid size
-    mock_metadata = Mock()
-    mock_metadata.size = -1
-    mock_api.get_repo_file_metadata.return_value = mock_metadata
+    # Mock repo_tree with a RepoFile that has invalid size
+    mock_api.list_repo_tree.return_value = [
+        RepoFile(path="invalid.txt", size=-1, type="file")  # Invalid negative size
+    ]
     
     with pytest.raises(FileSizeError, match="Failed to process file info"):
         file_manager.discover_files(
@@ -214,20 +217,12 @@ def test_thread_safety(file_manager):
 
 def test_file_categorization(mock_api, file_manager):
     """Test file categorization based on size"""
-    # Mock file list
-    mock_api.list_repo_files.return_value = [
-        "small.txt",
-        "big.txt"
+    # Mock repo_tree with RepoFile objects
+    mock_api.list_repo_tree.return_value = [
+        RepoFile(path="small.txt", size=50 * 1024 * 1024, type="file"),  # 50MB
+        RepoFile(path="big.txt", size=200 * 1024 * 1024, type="file"),   # 200MB
+        RepoFile(path="folder", size=0, type="directory")  # Directory should be skipped
     ]
-    
-    # Mock file metadata
-    def mock_metadata(repo_id, repo_type, path, token):
-        if path == "small.txt":
-            return Mock(size=50 * 1024 * 1024)  # 50MB
-        else:
-            return Mock(size=200 * 1024 * 1024)  # 200MB
-    
-    mock_api.get_repo_file_metadata.side_effect = mock_metadata
     
     # Get categorized files
     small_files, big_files = file_manager.discover_files(
@@ -240,3 +235,6 @@ def test_file_categorization(mock_api, file_manager):
     assert len(big_files) == 1
     assert small_files[0].name == "small.txt"
     assert big_files[0].name == "big.txt"
+    
+    # Verify directory was skipped
+    assert all(f.name != "folder" for f in small_files + big_files)

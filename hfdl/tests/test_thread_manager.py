@@ -1,7 +1,7 @@
 import pytest
 import threading
 import signal
-from concurrent.futures import ThreadPoolExecutor, ThreadError
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch, Mock
 from hfdl.thread_manager import ThreadManager, ThreadManagerError, ThreadScenario
 
@@ -40,7 +40,7 @@ def test_thread_creation_error():
     manager = ThreadManager()
     
     # Mock threading.Thread to raise error
-    with patch('threading.Thread', side_effect=threading.ThreadError("Thread creation failed")):
+    with patch('threading.Thread', side_effect=RuntimeError("Thread creation failed")):
         with pytest.raises(ThreadManagerError, match="Failed to start ctrl+c handler"):
             manager._setup_ctrl_c_handler()
 
@@ -49,7 +49,7 @@ def test_thread_pool_error():
     manager = ThreadManager()
     
     # Mock ThreadPoolExecutor to raise error
-    with patch('concurrent.futures.ThreadPoolExecutor', side_effect=ThreadError("Pool creation failed")):
+    with patch('concurrent.futures.ThreadPoolExecutor', side_effect=RuntimeError("Pool creation failed")):
         with pytest.raises(ThreadManagerError, match="Failed to start thread pool"):
             manager.start()
 
@@ -86,7 +86,7 @@ def test_ctrl_c_handler_error():
     
     # Create a mock thread that raises an error
     mock_thread = Mock()
-    mock_thread.start.side_effect = threading.ThreadError("Handler thread failed")
+    mock_thread.start.side_effect = RuntimeError("Handler thread failed")
     
     with patch('threading.Thread', return_value=mock_thread):
         with pytest.raises(ThreadManagerError, match="Failed to start ctrl+c handler"):
