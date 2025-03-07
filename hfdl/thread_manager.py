@@ -3,7 +3,7 @@ import signal
 import threading
 from enum import Enum
 from typing import Optional, List, Callable
-from concurrent.futures import ThreadPoolExecutor, ThreadError
+from concurrent.futures import ThreadPoolExecutor
 import logging
 
 logger = logging.getLogger(__name__)
@@ -99,7 +99,7 @@ class ThreadManager:
                 thread_name_prefix="download_worker"
             )
             logger.info(f"Thread manager started with {max_workers} download worker(s)")
-        except ThreadError as e:
+        except Exception as e:
             logger.error(f"Failed to start thread pool: {e}")
             raise ThreadManagerError(f"Failed to start thread pool: {e}")
         except Exception as e:
