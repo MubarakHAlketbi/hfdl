@@ -257,22 +257,26 @@ class SpeedManager:
                 raise ValueError("Remaining files cannot exceed total files")
                 
             with self._lock:
-                # Calculate factors
-                size_factor = file_size / total_size if total_size > 0 else 1
+                # Calculate factors with minimum thresholds to prevent extreme values
+                # Ensure size_factor is at least 0.1 to prevent tiny allocations for small files
+                size_factor = max(0.1, file_size / total_size if total_size > 0 else 1)
+                
+                # Ensure count_factor is reasonable
                 count_factor = remaining_files / total_files if total_files > 0 else 1
                 
-                # Calculate thread speed
-                thread_speed = (
-                    self._allowed_speed * 
-                    size_factor * 
-                    (1 + count_factor)  # Boost factor based on remaining work
-                )
+                # Calculate thread speed with a more balanced formula
+                # Base allocation is 70% of allowed speed distributed evenly
+                # Remaining 30% is adjusted based on file size and position
+                base_allocation = self._allowed_speed * 0.7
+                variable_allocation = self._allowed_speed * 0.3 * size_factor * (1 + count_factor)
+                thread_speed = base_allocation + variable_allocation
                 
                 # Store allocated speed
                 self._thread_speeds[thread_id] = thread_speed
                 
                 logger.debug(
-                    f"Thread {thread_id} allocated speed: {thread_speed:,.0f} B/s"
+                    f"Thread {thread_id} allocated speed: {thread_speed:,.0f} B/s "
+                    f"(base: {base_allocation:,.0f} B/s, variable: {variable_allocation:,.0f} B/s)"
                 )
                 return thread_speed
                 

@@ -386,6 +386,8 @@ class HFDownloader:
                     except Exception as e:
                         logger.error(f"Speed measurement failed: {e}")
                         return self._download_legacy()
+                else:
+                    logger.info("No large files detected; downloading small files without speed control.")
                     
                     # Download big files with speed control
                     download_threads = self.thread_manager.get_download_threads()

@@ -51,18 +51,18 @@ class ThreadManager:
                 logger.info("Received stop signal, initiating graceful shutdown...")
                 self._stop_event.set()
                 
-            def ctrl_c_thread():
-                try:
-                    signal.signal(signal.SIGINT, signal_handler)
-                    # Keep thread alive
-                    while not self._stop_event.is_set():
-                        self._stop_event.wait(1)
-                except Exception as e:
-                    logger.error(f"Error in ctrl+c handler thread: {e}")
-                    self._stop_event.set()
-                    
-            # Only setup handler if we have more than one thread
+            # For multi-thread scenarios, use a dedicated thread for signal handling
             if self._scenario != ThreadScenario.SINGLE_THREAD:
+                def ctrl_c_thread():
+                    try:
+                        signal.signal(signal.SIGINT, signal_handler)
+                        # Keep thread alive
+                        while not self._stop_event.is_set():
+                            self._stop_event.wait(1)
+                    except Exception as e:
+                        logger.error(f"Error in ctrl+c handler thread: {e}")
+                        self._stop_event.set()
+                
                 try:
                     self._ctrl_c_handler = threading.Thread(
                         target=ctrl_c_thread,
@@ -70,9 +70,13 @@ class ThreadManager:
                         daemon=True
                     )
                     self._ctrl_c_handler.start()
-                except threading.ThreadError as e:
+                except Exception as e:
                     logger.error(f"Failed to start ctrl+c handler thread: {e}")
                     raise ThreadManagerError(f"Failed to start ctrl+c handler: {e}")
+            # For single-thread scenarios, set up signal handler in the main thread
+            else:
+                logger.info("Setting up signal handler in main thread (single-core system)")
+                signal.signal(signal.SIGINT, signal_handler)
         except Exception as e:
             logger.error(f"Failed to setup ctrl+c handler: {e}")
             raise ThreadManagerError(f"Failed to setup ctrl+c handler: {e}")

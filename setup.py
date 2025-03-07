@@ -1,4 +1,13 @@
 from setuptools import setup, find_packages
+import re
+
+# Get version from __init__.py
+with open('hfdl/__init__.py', 'r') as f:
+    version_match = re.search(r"^__version__ = ['\"]([^'\"]*)['\"]", f.read(), re.M)
+    if version_match:
+        version = version_match.group(1)
+    else:
+        raise RuntimeError("Unable to find version string in hfdl/__init__.py")
 
 # Define requirements directly
 core_requirements = [
@@ -24,7 +33,7 @@ dev_requirements = [
 
 setup(
     name="hfdl",
-    version="0.3.1",
+    version=version,
     description="Fast and reliable downloader for Hugging Face models and datasets",
     long_description=open('README.md').read(),
     long_description_content_type='text/markdown',

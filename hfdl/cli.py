@@ -81,8 +81,32 @@ def main():
         else:
             print("\nDownload completed with errors", file=sys.stderr)
             sys.exit(1)
+    except (ValueError, argparse.ArgumentTypeError) as e:
+        # Handle validation errors
+        print(f"\nValidation error: {str(e)}", file=sys.stderr)
+        sys.exit(1)
+    except FileNotFoundError as e:
+        # Handle file system errors
+        print(f"\nFile not found: {str(e)}", file=sys.stderr)
+        sys.exit(1)
+    except PermissionError as e:
+        # Handle permission errors
+        print(f"\nPermission denied: {str(e)}", file=sys.stderr)
+        sys.exit(1)
+    except ImportError as e:
+        # Handle import errors
+        print(f"\nImport error: {str(e)}", file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        # Handle user interruption
+        print("\nDownload cancelled by user", file=sys.stderr)
+        sys.exit(1)
     except Exception as e:
-        print(f"\nERROR: {str(e)}", file=sys.stderr)
+        # Catch-all for unexpected errors
+        print(f"\nUnexpected error: {str(e)}", file=sys.stderr)
+        # Print more details in debug mode
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 if __name__ == "__main__":
