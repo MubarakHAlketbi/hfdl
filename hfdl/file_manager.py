@@ -12,6 +12,7 @@ from huggingface_hub.utils import (
 )
 from huggingface_hub.hf_api import RepoFile
 from requests.exceptions import HTTPError
+from .utils import sanitize_filename, get_os_compatible_path
 
 logger = logging.getLogger(__name__)
 
@@ -105,11 +106,13 @@ class FileManager:
                         
                     # Create file info
                     try:
+                        # Sanitize the path for OS compatibility
+                        safe_path = get_os_compatible_path(repo_file.path)
                         file_info = FileInfo(
-                            name=Path(repo_file.path).name,
+                            name=sanitize_filename(Path(repo_file.path).name),
                             size=repo_file.size,
                             path_in_repo=repo_file.path,
-                            local_path=Path(repo_file.path)
+                            local_path=Path(safe_path)
                         )
                     except Exception as e:
                         logger.error(f"Error creating FileInfo for {repo_file.path}: {e}")
@@ -122,6 +125,7 @@ class FileManager:
                         big_files.append(file_info)
                         
                     with self._lock:
+                        # Store with original path as key for HF API reference
                         self._files[repo_file.path] = file_info
                         
                 except Exception as e:

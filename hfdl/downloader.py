@@ -5,6 +5,7 @@ import time
 import requests
 from pathlib import Path
 from typing import Optional, List, Union, Tuple, Dict, Any
+import platform
 from requests.exceptions import HTTPError
 from huggingface_hub import (
     HfApi,
@@ -23,6 +24,7 @@ from .config import DownloadConfig
 from .thread_manager import ThreadManager
 from .file_manager import FileManager, FileInfo
 from .speed_manager import SpeedManager
+from .utils import sanitize_filename, get_os_compatible_path
 
 logger = logging.getLogger(__name__)
 
@@ -195,7 +197,9 @@ class HFDownloader:
                 
             # Prepare local path
             local_dir = Path(local_dir)
-            local_path = local_dir / filename
+            # Sanitize the filename to be OS-compatible
+            safe_filename = get_os_compatible_path(filename)
+            local_path = local_dir / safe_filename
             local_path.parent.mkdir(parents=True, exist_ok=True)
             
             # Get file info for progress tracking
@@ -313,7 +317,9 @@ class HFDownloader:
                 return False
             
             # Create output directory
-            output_dir = self.download_dir / self.model_id.split('/')[-1]
+            # Use sanitized model name for directory
+            model_dirname = sanitize_filename(self.model_id.split('/')[-1])
+            output_dir = self.download_dir / model_dirname
             output_dir.mkdir(parents=True, exist_ok=True)
             
             # Track failed downloads
@@ -458,7 +464,9 @@ class HFDownloader:
         try:
             # Create output directory
             try:
-                output_dir = self.download_dir / self.model_id.split('/')[-1]
+                # Use sanitized model name for directory
+                model_dirname = sanitize_filename(self.model_id.split('/')[-1])
+                output_dir = self.download_dir / model_dirname
                 output_dir.mkdir(parents=True, exist_ok=True)
             except OSError as e:
                 logger.error(f"Cannot create output directory: {e}")
