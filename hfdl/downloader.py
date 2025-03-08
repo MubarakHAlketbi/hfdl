@@ -3,8 +3,11 @@ import logging
 import argparse
 import time
 import requests
+import sys
+import traceback
 from pathlib import Path
 from typing import Optional, List, Union, Tuple, Dict, Any
+from . import __version__
 import platform
 from requests.exceptions import HTTPError
 from huggingface_hub import (
@@ -551,40 +554,101 @@ def validate_percentage(value):
             "Must be a number between 0 and 100"
         )
 
+def get_example_text():
+    """Return formatted examples for the help text."""
+    examples = [
+        "Basic download: hfdl MaziyarPanahi/Qwen2.5-7B-Instruct-GGUF",
+        "Advanced mode: hfdl Anthropic/hh-rlhf --optimize-download",
+        "Custom threads: hfdl Anthropic/hh-rlhf --threads 4",
+        "Force download: hfdl Anthropic/hh-rlhf --directory ./models --force",
+        "Dataset download: hfdl Anthropic/hh-rlhf --repo-type dataset"
+    ]
+    return "\n  ".join(["Examples:"] + examples)
+
 def main():
-    """Command line interface."""
+    """Command line interface with user-friendly options."""
+    # Create the main parser with a more detailed description
     parser = argparse.ArgumentParser(
-        description="Fast and reliable downloader for Hugging Face models and datasets."
+        description="Fast and reliable downloader for Hugging Face models and datasets.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=get_example_text()
     )
-    parser.add_argument("repo_id_or_url", help="Repository ID or URL")
-    parser.add_argument("-t", "--threads", type=validate_threads, default='auto',
-                       help="Number of threads (auto or positive integer)")
-    parser.add_argument("-d", "--directory", default="downloads",
-                       help="Download directory")
-    parser.add_argument("-r", "--repo_type", default="model",
+    # Add version argument
+    parser.add_argument('-v', '--version',
+                       action='version',
+                       version=f'%(prog)s {__version__}')
+    
+    # Create argument groups for better organization
+    basic_group = parser.add_argument_group('Basic Options', 'Essential options for most download needs')
+    advanced_group = parser.add_argument_group('Advanced Options', 'Additional options for fine-tuning download behavior')
+    output_group = parser.add_argument_group('Output Options', 'Control the verbosity and behavior of the tool')
+    
+    # Model ID argument (with nargs='?' to make it optional for interactive mode)
+    parser.add_argument("repo_id_or_url", nargs='?',
+                       help="Repository ID or URL (format: username/repo-name)")
+    
+    # Basic options
+    basic_group.add_argument("-d", "--directory", default="downloads",
+                       help="Directory where files will be saved (default: ./downloads)")
+    basic_group.add_argument("-r", "--repo-type", default="model",
                        choices=["model", "dataset", "space"],
-                       help="Repository type")
-    parser.add_argument("--verify", action="store_true",
-                       help="Verify downloads")
-    parser.add_argument("--force", action="store_true",
-                       help="Force fresh download")
-    parser.add_argument("--no-resume", action="store_true",
-                       help="Disable download resuming")
+                       help="Type of repository to download (default: model)")
+    basic_group.add_argument("--verify", action="store_true",
+                       help="Verify integrity of downloaded files")
+    basic_group.add_argument("--force", action="store_true",
+                       help="Force fresh download, overwriting existing files")
+    basic_group.add_argument("--no-resume", action="store_true",
+                       help="Start download from beginning, disabling resume capability")
     
-    # Enhanced mode arguments
-    parser.add_argument("--enhanced", action="store_true",
-                       help="Enable enhanced download features")
-    parser.add_argument("--size-threshold", type=float, default=100.0,
-                       help="Size threshold in MB for file categorization")
-    parser.add_argument("--bandwidth", type=validate_percentage, default=95.0,
-                       help="Percentage of bandwidth to use")
-    parser.add_argument("--measure-time", type=int, default=8,
-                       help="Seconds to measure initial download speed")
+    # Advanced options (renamed and improved descriptions)
+    advanced_group.add_argument("--optimize-download", action="store_true", dest="enhanced",
+                       help="Enable optimized download with size-based categorization and bandwidth control")
+    advanced_group.add_argument("-t", "--threads", type=validate_threads, default='auto',
+                       help="Number of download threads (auto: optimal based on CPU cores, or specify a positive number)")
+    advanced_group.add_argument("--size-threshold", type=float, default=100.0,
+                       help="Files larger than this size (in MB) will use bandwidth control (default: 100.0)")
+    advanced_group.add_argument("--bandwidth", type=validate_percentage, default=95.0,
+                       help="Percentage of measured bandwidth to use for downloading large files (default: 95.0)")
+    advanced_group.add_argument("--measure-time", type=int, default=8,
+                       help="Duration in seconds to measure initial download speed (default: 8)")
     
+    # Output control options
+    output_group.add_argument("--quiet", action="store_true",
+                       help="Suppress all output except errors")
+    output_group.add_argument("--verbose", action="store_true",
+                       help="Show detailed progress and debug information")
+    output_group.add_argument("--dry-run", action="store_true",
+                       help="Show what would be downloaded without actually downloading files")
     args = parser.parse_args()
 
+    # Interactive mode if no repository is specified
     if not args.repo_id_or_url:
-        args.repo_id_or_url = input("Enter the Hugging Face repository ID or URL: ")
+        print("Welcome to the Hugging Face Download Library (HFDL) interactive mode!")
+        args.repo_id_or_url = input("\nEnter the model or dataset ID (e.g., bert-base-uncased): ")
+        
+        # Only ask for directory if not specified
+        if args.directory == "downloads":
+            custom_dir = input(f"Enter download directory (default: ./downloads): ")
+            if custom_dir:
+                args.directory = custom_dir
+        
+        # Ask about optimization
+        if not args.enhanced:
+            optimize = input("Enable optimized downloading features? (y/n, default: n): ").lower()
+            args.enhanced = optimize.startswith('y')
+    
+    # Handle dry run mode
+    if args.dry_run:
+        print(f"\nDRY RUN: Would download {args.repo_id_or_url} as a {args.repo_type}")
+        print(f"Download directory: {args.directory}")
+        print(f"Optimized download: {'Enabled' if args.enhanced else 'Disabled'}")
+        if args.enhanced:
+            print(f"Thread count: {args.threads}")
+            print(f"Size threshold: {args.size_threshold} MB")
+            print(f"Bandwidth usage: {args.bandwidth}%")
+        print("\nNo files will be downloaded in dry-run mode.")
+        return 0
+
 
     downloader = HFDownloader(
         model_id=args.repo_id_or_url,
@@ -600,8 +664,43 @@ def main():
         enhanced_mode=args.enhanced
     )
 
-    success = downloader.download()
-    return 0 if success else 1
+    # Configure logging based on verbosity flags
+    log_level = logging.WARNING
+    if args.verbose:
+        log_level = logging.DEBUG
+    elif args.quiet:
+        log_level = logging.ERROR
+    
+    logging.basicConfig(
+        level=log_level,
+        format='%(levelname)s: %(message)s'
+    )
+    
+    # If quiet mode is enabled, suppress stdout print statements
+    if args.quiet:
+        sys.stdout = open(os.devnull, 'w')
+    
+    try:
+        success = downloader.download()
+        
+        # Restore stdout if it was redirected
+        if args.quiet:
+            sys.stdout = sys.__stdout__
+            
+        if success:
+            print("\nDownload completed successfully")
+        else:
+            print("\nDownload completed with errors", file=sys.stderr)
+            return 1
+        return 0
+    except Exception as e:
+        # Restore stdout if it was redirected
+        if args.quiet:
+            sys.stdout = sys.__stdout__
+        print(f"\nError: {str(e)}", file=sys.stderr)
+        if args.verbose:
+            traceback.print_exc()
+        return 1
 
 if __name__ == "__main__":
     exit(main())

@@ -1,6 +1,6 @@
 # HFDL - Hugging Face Download Library (v. 0.3.1)
 
-A fast and reliable downloader for Hugging Face models and datasets with enhanced features.
+A fast and reliable downloader for Hugging Face models and datasets with intelligent optimization features that adapt to your system capabilities, network conditions, and specific needs.
 
 <p align="center">
   <a href="https://pay.ziina.com/MubarakHAlketbi">
@@ -8,14 +8,53 @@ A fast and reliable downloader for Hugging Face models and datasets with enhance
   </a>
 </p>
 
-## Features
+## Smart Systems
 
-- Smart file categorization based on size
-- CPU-based thread auto-scaling
-- Bandwidth control and optimization
-- Progress tracking
-- Comprehensive error handling
-- Extensive test coverage
+HFDL incorporates several intelligent systems that work together to optimize your download experience:
+
+### 1. CPU-Based Thread Auto-Scaling
+- **What it does**: Automatically determines the optimal number of threads based on your CPU cores
+- **How it works**:
+  - 1-2 CPU cores: Allocates 2 threads
+  - 3-8 cores: Uses a number of threads equal to the core count
+  - More than 8 cores: Caps at 8 threads to prevent overloading
+- **Why it's smart**: Balances performance and resource usage without manual tuning
+
+### 2. Size-Based File Categorization
+- **What it does**: Classifies files as "small" or "big" based on a configurable threshold (default: 100 MB)
+- **How it works**:
+  - Small files: Downloaded quickly, often in parallel
+  - Big files: Handled with bandwidth control for efficient resource allocation
+- **Why it's smart**: Optimizes download strategy based on file characteristics
+
+### 3. Bandwidth Measurement and Control
+- **What it does**: Measures your download speed and limits usage to a percentage (default: 95%)
+- **How it works**:
+  - Measures initial speed with a sample file
+  - Allocates bandwidth across threads for large files
+  - Introduces micro-delays to maintain speed limits when needed
+- **Why it's smart**: Prevents network saturation while maximizing throughput
+
+### 4. Graceful Interruption Handling
+- **What it does**: Ensures downloads can be safely interrupted without corrupted files
+- **How it works**:
+  - Uses a dedicated thread for interrupt signals on multi-core systems
+  - Implements clean shutdown procedures for all resources
+- **Why it's smart**: Provides reliability and responsiveness during long downloads
+
+### 5. Comprehensive Error Handling
+- **What it does**: Anticipates and manages a wide range of potential errors
+- **How it works**:
+  - Implements custom exception hierarchy for precise error handling
+  - Provides fallback mechanisms and recovery strategies
+- **Why it's smart**: Maintains operation even under adverse conditions
+
+### 6. Progress Tracking
+- **What it does**: Monitors and displays download progress at both file and overall levels
+- **How it works**:
+  - Tracks bytes downloaded for each file
+  - Aggregates progress across all files for overall completion percentage
+- **Why it's smart**: Provides real-time feedback with thread-safe accuracy
 
 ## Installation
 
@@ -52,30 +91,69 @@ downloader.download()
 
 ## Command Line Usage
 
+The CLI has been reorganized for better usability, with options grouped into Basic, Advanced, and Output categories.
+
+### Interactive Mode
+
+If you run `hfdl` without arguments, it will enter interactive mode and guide you through the process:
+
+```bash
+# Start interactive mode
+hfdl
+```
+
+### Command Examples
+
 ```bash
 # Basic usage
 hfdl MaziyarPanahi/Qwen2.5-7B-Instruct-GGUF
 
-# Enhanced mode
-hfdl Anthropic/hh-rlhf --enhanced --size-threshold 100 --bandwidth 95
+# Advanced mode with optimized downloading
+hfdl Anthropic/hh-rlhf --optimize-download
 
-# Full options
-hfdl [repo_id] [options]
-  --enhanced            Enable enhanced features
-  --size-threshold MB   Size threshold for file categorization
-  --bandwidth PERCENT   Bandwidth usage percentage
-  --measure-time SECS   Speed measurement duration
-  --threads NUM        Number of download threads
-  --directory PATH     Download directory
-  --repo-type TYPE     Repository type (model/dataset/space)
-  --verify             Verify downloads
-  --force              Force fresh download
-  --no-resume          Disable download resuming
+# Custom threads and directory
+hfdl Anthropic/hh-rlhf --threads 4 --directory ./models
+
+# Test what would be downloaded without downloading
+hfdl Anthropic/hh-rlhf --dry-run
 ```
+
+### Available Options
+
+```
+Basic Options:
+  -d, --directory DIR       Directory where files will be saved
+  -r, --repo-type TYPE      Type of repository (model/dataset/space)
+  --verify                  Verify integrity of downloaded files
+  --force                   Force fresh download, overwriting existing files
+  --no-resume               Disable download resuming
+
+Advanced Options:
+  --optimize-download       Enable optimized downloading with size-based
+                            categorization and bandwidth control
+  -t, --threads NUM         Number of download threads (auto: optimal based on
+                            CPU cores, or specify a positive number)
+  --size-threshold MB       Files larger than this size will use bandwidth control
+  --bandwidth PERCENT       Percentage of measured bandwidth to use
+  --measure-time SECS       Duration to measure initial download speed
+
+Output Options:
+  --quiet                   Suppress all output except errors
+  --verbose                 Show detailed progress and debug information
+  --dry-run                 Show what would be downloaded without downloading
+```
+
+## Cross-Platform Compatibility
+
+HFDL is designed to work seamlessly across different operating systems:
+
+- **Windows, macOS, and Linux** support
+- **Path sanitization** to handle OS-specific filename restrictions
+- **Adaptive file handling** that respects platform limitations
 
 ## Error Handling
 
-HFDL provides comprehensive error handling:
+HFDL provides comprehensive error handling and recovery mechanisms:
 
 ### Error Types
 
@@ -94,18 +172,20 @@ HFDL provides comprehensive error handling:
 ### Error Recovery
 
 HFDL implements automatic error recovery:
-- Network retry mechanisms
-- Resource cleanup
-- State recovery
-- Fallback to legacy mode
+- Network retry mechanisms for transient failures
+- Resource cleanup to prevent leaks
+- State recovery to resume interrupted operations
+- Fallback to legacy mode when enhanced features encounter issues
+- OS-specific path handling to prevent filename-related errors
 
 ### Thread Safety
 
 All operations are thread-safe:
-- Resource protection
-- State consistency
-- Safe cleanup
-- Error propagation
+- Resource protection with proper locking mechanisms
+- State consistency across concurrent operations
+- Safe cleanup even during interruptions
+- Error propagation to the appropriate handlers
+- Thread-aware progress tracking
 
 ## Testing
 
