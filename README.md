@@ -2,6 +2,8 @@
 
 A fast and reliable downloader for Hugging Face models and datasets with enhanced features.
 
+[![Support Me - Donate](https://img.shields.io/badge/Support_Me-Donate-9626ff?style=for-the-badge&logo=https%3A%2F%2Fimgur.com%2FvwC39JY)](https://pay.ziina.com/MubarakHAlketbi)
+
 ## Features
 
 - Smart file categorization based on size
