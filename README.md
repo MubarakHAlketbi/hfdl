@@ -6,6 +6,9 @@ A fast and reliable downloader for Hugging Face models and datasets with intelli
   <a href="https://pay.ziina.com/MubarakHAlketbi">
     <img src="https://img.shields.io/badge/Support_Me-Donate-9626ff?style=for-the-badge&logo=https%3A%2F%2Fimgur.com%2FvwC39JY" alt="Support Me - Donate">
   </a>
+  <a href="https://github.com/RooVetGit/Roo-Code">
+    <img src="https://img.shields.io/badge/Built_With-Roo_Code-412894?style=for-the-badge" alt="Built With - Roo Code">
+  </a>
 </p>
 
 ## Smart Systems
